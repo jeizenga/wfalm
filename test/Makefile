@@ -3,6 +3,7 @@ INCDIR = $(CWD)/..
 CXX ?= g++
 CPPFLAGS = -std=c++11 -m64 -g -O3 -I$(INCDIR)
 
+
 all: 
 	make test
 
