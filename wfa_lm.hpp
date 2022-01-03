@@ -112,6 +112,13 @@ wavefront_align(const std::string& seq1, const std::string& seq2,
 /// the first and second sequence respectively
 inline
 std::tuple<std::vector<CIGAROp>, int32_t, std::pair<size_t, size_t>, std::pair<size_t, size_t>>
+wavefront_align_local_low_mem(const std::string& seq1, const std::string& seq2,
+                              size_t anchor_begin_1, size_t anchor_end_1,
+                              size_t anchor_begin_2, size_t anchor_end_2,
+                              const SWGScores& scores, bool anchor_is_match = true);
+
+inline
+std::tuple<std::vector<CIGAROp>, int32_t, std::pair<size_t, size_t>, std::pair<size_t, size_t>>
 wavefront_align_local(const std::string& seq1, const std::string& seq2,
                       size_t anchor_begin_1, size_t anchor_end_1,
                       size_t anchor_begin_2, size_t anchor_end_2,
@@ -129,7 +136,66 @@ wavefront_align_local(const std::string& seq1, const std::string& seq2,
 
 namespace internal {
 
-enum WFMatrix_t {MAT_M, MAT_D, MAT_I};
+/*
+ * Adapter to avoid string copying for when aligning subintervals
+ */
+class StringView {
+public:
+    StringView(const std::string& seq, size_t i, size_t len)
+    : seq(seq), i(i), len(len)
+    {
+        if (i > seq.size() || i + len > seq.size()) {
+            throw std::runtime_error("StringView bounds do not fit in string\n");
+        }
+    }
+    
+    inline char operator[](size_t idx) const {
+        return seq[i + idx];
+    }
+    
+    inline size_t size() const {
+        return len;
+    }
+    
+private:
+    
+    const std::string& seq;
+    size_t i;
+    size_t len;
+};
+
+/*
+ * Adapter to avoid string copying for when aligning subintervals
+ * that also reverses the string
+ */
+class RevStringView {
+public:
+    // note: interval is provided in forward direction
+    RevStringView(const std::string& seq, size_t i, size_t len)
+    : seq(seq), last(i + len - 1), len(len)
+    {
+        if (i > seq.size() || last + 1 > seq.size()) {
+            throw std::runtime_error("RevStringView bounds do not fit in string\n");
+        }
+    }
+    
+    inline char operator[](size_t idx) const {
+        return seq[last - idx];
+    }
+    
+    inline size_t size() const {
+        return len;
+    }
+    
+private:
+    
+    const std::string& seq;
+    size_t last;
+    size_t len;
+};
+
+/* For use in traceback */
+enum WFMatrix_t {MAT_M = 0, MAT_I = 1, MAT_D = 2};
 
 struct WFEntry {
     WFEntry() :
@@ -155,65 +221,6 @@ public:
     
     int32_t diag_begin;
     std::deque<WFEntry> entries;
-};
-
-/*
- * Adapter to avoid string copying for local alignment of tails
- */
-class StringView {
-public:
-    StringView(const std::string& seq, size_t i, size_t len)
-    : seq(seq), i(i), len(len)
-    {
-        if (i > seq.size() || i + len > seq.size()) {
-            throw std::runtime_error("StringView bounds do not fit in string\n");
-        }
-    }
-    
-    char operator[](size_t idx) const {
-        return seq[i + idx];
-    }
-    
-    size_t size() const {
-        return len;
-    }
-    
-private:
-    
-    const std::string& seq;
-    size_t i;
-    size_t len;
-};
-
-// TODO: a bit repetitive
-/*
- * Adapter to avoid string copying for local alignment of tails
- * that also reverses the string
- */
-class RevStringView {
-public:
-    // note: interval is provided in forward direction
-    RevStringView(const std::string& seq, size_t i, size_t len)
-    : seq(seq), end(i + len), len(len)
-    {
-        if (i > seq.size() || end > seq.size()) {
-            throw std::runtime_error("RevStringView bounds do not fit in string\n");
-        }
-    }
-    
-    char operator[](size_t idx) const {
-        return seq[end - idx];
-    }
-    
-    size_t size() const {
-        return len;
-    }
-    
-private:
-    
-    const std::string& seq;
-    size_t end;
-    size_t len;
 };
 
 template<typename StringType>
@@ -261,7 +268,7 @@ Wavefront wavefront_next(const StringType& seq1, const StringType& seq2,
         }
     }
     
-    // some twiddly code so that we can use the same constructor and preserve RVO
+    // some twiddly code so that we can call ctor only once and preserve RVO
     int32_t ctor_lo, ctor_hi;
     if (hi < lo) {
         ctor_lo = 0;
@@ -274,7 +281,7 @@ Wavefront wavefront_next(const StringType& seq1, const StringType& seq2,
     
     Wavefront wf(ctor_lo, ctor_hi);
     
-    if (lo <= hi) {
+    if (lo < hi) {
         
         // open gaps
         if (wfs.size() >= scores.gap_extend + scores.gap_open) {
@@ -364,16 +371,14 @@ bool wavefront_reached(const Wavefront& wf, int32_t diag, int32_t anti_diag) {
     return false;
 }
 
-// always begins at the last wave front, creates the CIGAR in reverse order,
+// creates the CIGAR in reverse order,
 // appends new CIGAR operations to the CIGAR string that is passed in
 template<typename WFVector, typename StringType>
 void wavefront_traceback_internal(const StringType& seq1, const StringType& seq2,
                                   const WFScores& scores, const WFVector& wfs,
                                   int64_t& d, int64_t& lead_matches, WFMatrix_t& mat, int64_t& s,
                                   std::vector<CIGAROp>& cigar) {
-    
-    s = wfs.size() - 1;
-    
+        
     // TODO: traceback is O(N + M) even with suffix tree, but backpointers
     // could make it O(s). should i do that?
     
@@ -397,7 +402,6 @@ void wavefront_traceback_internal(const StringType& seq1, const StringType& seq2
                 a -= 2;
                 ++lead_matches;
             }
-            //std::cerr << "matrix M, s " << s << ", match " << lead_matches << endl;
             if (s == 0) {
                 // this condition handles the initial wf_extend, which was not preceded
                 // by a wf_next, so we skip that part of the traceback
@@ -533,6 +537,15 @@ std::vector<CIGAROp> wavefront_traceback(const StringType& seq1, const StringTyp
 }
 
 namespace debug {
+
+template<typename StringType>
+std::string str(const StringType& str) {
+    std::stringstream strm;
+    for (size_t i = 0; i < str.size(); ++i) {
+        strm << str[i];
+    }
+    return strm.str();
+}
 
 inline
 void print_wf(const Wavefront& wf, int diag_begin, int diag_end) {
@@ -736,12 +749,54 @@ void coalesce_cigar(std::vector<CIGAROp>& cigar) {
     cigar.resize(into + 1);
 }
 
-template <typename StringType>
+/*
+ * Allows the WF bank to be used in wf_next
+ */
+struct WFBankAdapter {
+    WFBankAdapter(const std::vector<std::pair<int32_t, Wavefront>>& wf_bank) : wf_bank(wf_bank) {
+        
+    }
+    
+    inline const Wavefront& operator[](size_t i) const {
+        return wf_bank[i].second;
+    };
+    
+    inline size_t size() const {
+        return wf_bank.size();
+    }
+    
+    const std::vector<std::pair<int32_t, Wavefront>>& wf_bank;
+};
+
+template <bool Local, typename StringType>
 std::vector<CIGAROp> wavefront_traceback_low_mem(const StringType& seq1, const StringType& seq2,
                                                  const WFScores& scores, int32_t prune_diff,
-                                                 const std::vector<std::pair<int32_t, Wavefront>>& wf_bank) {
+                                                 std::vector<std::pair<int32_t, Wavefront>>& wf_bank,
+                                                 int64_t s, int64_t d) {
     
+    // the return value
     std::vector<CIGAROp> cigar;
+    
+    if (Local) {
+        // if we overshot the opt traceback location, clear the way for it to be
+        // in the last position of the bank
+        while (wf_bank.back().first > s) {
+            wf_bank.pop_back();
+        }
+        // and recompute out to the opt if necessary
+        WFBankAdapter adapter(wf_bank);
+        while (wf_bank.back().first < s) {
+            wf_bank.emplace_back(wf_bank.back().first + 1,
+                                 wavefront_next(seq1, seq2, scores, adapter));
+            wavefront_extend(seq1, seq2, wf_bank.back().second);
+            if (prune_diff >= 0) {
+                // prune lagging diagonals
+                wavefront_prune(wf_bank.back().second, prune_diff);
+            }
+        }
+        // the traceback starting location should now be in the final wavefront
+        // in the bank, regardless of global/local
+    }
     
     // a moving window over the DP that we will incrementally do traceback through
     std::deque<Wavefront> traceback_block;
@@ -755,12 +810,11 @@ std::vector<CIGAROp> wavefront_traceback_low_mem(const StringType& seq1, const S
         --i;
         traceback_block.emplace_front(std::move(wf_bank[i].second));
     }
-    // begin traceback at the end of the sequence
-    int64_t d = seq1.size() - seq2.size();
+    // begin traceback in the match matrix
     WFMatrix_t mat = MAT_M;
     int64_t lead_matches = 0;
     // the index within the traceback block that traceback ends, initial value is arbitrary
-    int64_t relative_s = 0;
+    int64_t relative_s = traceback_block.size() - 1;;
 //    std::cerr << "### begin traceback at diag " << d << " ###" << std::endl;
 //    print_wfs_tb(traceback_block, wf_bank, i);
     
@@ -793,7 +847,7 @@ std::vector<CIGAROp> wavefront_traceback_low_mem(const StringType& seq1, const S
         }
         
         // redo the DP between the stripes
-        for (int32_t t = wf_bank[i - 1].first + 1, s = wf_bank[i].first; t < s; ++t) {
+        for (int32_t t = wf_bank[i - 1].first + 1, end = wf_bank[i].first; t < end; ++t) {
             fillin_wfs.emplace_back(wavefront_next(seq1, seq2, scores, fillin_wfs));
             wavefront_extend(seq1, seq2, fillin_wfs.back());
             if (prune_diff >= 0) {
@@ -811,6 +865,7 @@ std::vector<CIGAROp> wavefront_traceback_low_mem(const StringType& seq1, const S
 //        print_wfs_tb(traceback_block, wf_bank, i);
         
         // traceback as far as possible in this block
+        relative_s = traceback_block.size() - 1;
         wavefront_traceback_internal(seq1, seq2, scores, traceback_block,
                                      d, lead_matches, mat, relative_s, cigar);
         // remove anything we don't need anymore
@@ -837,21 +892,23 @@ void find_local_opt(const StringType& seq1, const StringType& seq2,
                     int64_t s, const Wavefront& wf, int32_t match_score,
                     int64_t& opt, int64_t& opt_diag, int64_t& opt_s, size_t& max_s) {
     
-    for (int64_t i = 0; i < wf.entries.size(); ++i) {
+    for (int64_t k = 0; k < wf.entries.size(); ++k) {
         // the score of the corresponding local alignment
-        int32_t local_s = match_score * wf.entries[i].M - s;
-        if (local_s > opt) {
-            // record that we found a new best
+        // note: have to add 2 because i decided to start the DP at -2, sigh...
+        auto a = wf.entries[k].M + 2;
+        int32_t local_s = match_score * a - s;
+        if (local_s > opt && a >= std::abs(wf.diag_begin + k)) {
+            // we found a new best that is inside the matrix
             opt = local_s;
-            opt_diag = wf.diag_begin + i;
+            opt_diag = wf.diag_begin + k;
             opt_s = s;
             // update our bound on how far out we need to look
-            max_s = s + match_score * (2 * std::min(seq1.size(), seq2.size()) - wf.entries[i].M) - 1;
+            max_s = s + match_score * (2 * std::min(seq1.size(), seq2.size()) - a);
         }
     }
 }
 
-template<bool local, typename StringType>
+template<bool Local, typename StringType>
 std::pair<std::vector<CIGAROp>, int32_t>
 wavefront_align_core(const StringType& seq1, const StringType& seq2,
                      const WFScores& scores, int32_t prune_diff, int32_t match_score) {
@@ -865,10 +922,12 @@ wavefront_align_core(const StringType& seq1, const StringType& seq2,
     int32_t final_diag = seq1.size() - seq2.size();
     int32_t final_anti_diag = seq1.size() + seq2.size() - 2;
     
+    // trackers used for local alignment
     int64_t opt = 0;
     int64_t opt_diag = 0;
     int64_t opt_s = 0;
     size_t max_s = std::numeric_limits<size_t>::max();
+    size_t s = 0;
     
     // init wavefront to the upper left of both sequences' starts
     std::vector<Wavefront> wfs(1, Wavefront(0, 1));
@@ -876,18 +935,19 @@ wavefront_align_core(const StringType& seq1, const StringType& seq2,
     
     // do wavefront iterations until hit max score or alignment finishes
     wavefront_extend(seq1, seq2, wfs.front());
-    if (local) {
-        find_local_opt(seq1, seq2, wfs.size() - 1, wfs.back(), match_score,
+    if (Local) {
+        find_local_opt(seq1, seq2, s, wfs.front(), match_score,
                        opt, opt_diag, opt_s, max_s);
     }
-    while (!wavefront_reached(wfs.back(), final_diag, final_anti_diag) ||
-           wfs.size() > max_s) {
+    while (!wavefront_reached(wfs.back(), final_diag, final_anti_diag) &&
+           s <= max_s) {
         
+        ++s;
         wfs.emplace_back(wavefront_next(seq1, seq2, scores, wfs));
         
         wavefront_extend(seq1, seq2, wfs.back());
-        if (local) {
-            find_local_opt(seq1, seq2, wfs.size() - 1, wfs.back(), match_score,
+        if (Local) {
+            find_local_opt(seq1, seq2, s, wfs.back(), match_score,
                            opt, opt_diag, opt_s, max_s);
         }
         
@@ -895,6 +955,9 @@ wavefront_align_core(const StringType& seq1, const StringType& seq2,
             // prune lagging diagonals
             wavefront_prune(wfs.back(), prune_diff);
         }
+        
+//        std::cerr << "WF state at s " << s << std::endl;
+//        debug::print_wfs(wfs);
     }
     
 #ifdef debug_viz
@@ -902,7 +965,7 @@ wavefront_align_core(const StringType& seq1, const StringType& seq2,
 #endif
     
     int64_t traceback_s, traceback_d;
-    if (local) {
+    if (Local) {
         traceback_d = opt_diag;
         traceback_s = opt_s;
     }
@@ -911,16 +974,20 @@ wavefront_align_core(const StringType& seq1, const StringType& seq2,
         traceback_s = wfs.size() - 1;
     }
     
+//    debug::print_wfs(wfs);
+    
+//    std::cerr << "beginning traceback" << std::endl;
+    
     return std::make_pair(wavefront_traceback(seq1, seq2, scores, wfs,
                                               traceback_s, traceback_d),
                           int32_t(traceback_s));
 }
 
 
-template<typename StringType>
+template<bool Local, typename StringType>
 std::pair<std::vector<CIGAROp>, int32_t>
 wavefront_align_low_mem_core(const StringType& seq1, const StringType& seq2,
-                             const WFScores& scores, int32_t prune_diff) {
+                             const WFScores& scores, int32_t prune_diff, int32_t match_score) {
     
     if (seq1.size() + seq2.size() > std::numeric_limits<int32_t>::max()) {
         std::stringstream strm;
@@ -929,27 +996,38 @@ wavefront_align_low_mem_core(const StringType& seq1, const StringType& seq2,
     }
     
     // epoch parameters used to sub-sample wavefronts to retain
-    int32_t stripe_width = std::max(scores.mismatch,
+    int64_t stripe_width = std::max(scores.mismatch,
                                     scores.gap_open + scores.gap_extend);
-    int32_t epoch_len = 1;
-    int32_t epoch_end = 1;
-    int32_t sample_rate = 1;
+    int64_t epoch_len = 1;
+    int64_t epoch_end = 1;
+    int64_t sample_rate = 1;
     
     // use these to know when we've finished the alignment
     int32_t final_diag = seq1.size() - seq2.size();
     int32_t final_anti_diag = seq1.size() + seq2.size() - 2;
     
+    // trackers used for local alignment
+    int64_t opt = 0;
+    int64_t opt_diag = 0;
+    int64_t opt_s = 0;
+    size_t max_s = std::numeric_limits<size_t>::max();
+    
     // init wavefront to the upper left of both sequences' starts
     std::deque<Wavefront> wf_buffer(1, Wavefront(0, 1));
     wf_buffer.back().entries[0].M = -2;
-    int32_t s = 0;
+    size_t s = 0;
     
     // the wavefronts we've decided to keep after they leave the buffer
     std::vector<std::pair<int32_t, Wavefront>> wf_bank;
     
     // do wavefront iterations until hit max score or alignment finishes
     wavefront_extend(seq1, seq2, wf_buffer.front());
-    while (!wavefront_reached(wf_buffer.back(), final_diag, final_anti_diag)) {
+    if (Local) {
+        find_local_opt(seq1, seq2, s, wf_buffer.front(), match_score,
+                       opt, opt_diag, opt_s, max_s);
+    }
+    while (!wavefront_reached(wf_buffer.back(), final_diag, final_anti_diag) &&
+           s <= max_s) {
         
         // increase score and get the next wavefront
         ++s;
@@ -983,12 +1061,15 @@ wavefront_align_low_mem_core(const StringType& seq1, const StringType& seq2,
         // follow matches
         wavefront_extend(seq1, seq2, wf_buffer.back());
         
+        if (Local) {
+            find_local_opt(seq1, seq2, s, wf_buffer.back(), match_score,
+                           opt, opt_diag, opt_s, max_s);
+        }
+        
         if (prune_diff >= 0) {
             // prune lagging diagonals
             wavefront_prune(wf_buffer.back(), prune_diff);
         }
-        
-        //        print_wfs_low_mem(wf_bank, wf_buffer, s);
     }
     
     // move the final wavefronts from the buffer to the bank
@@ -996,7 +1077,19 @@ wavefront_align_low_mem_core(const StringType& seq1, const StringType& seq2,
         wf_bank.emplace_back(s - wf_buffer.size() + i + 1, std::move(wf_buffer[i]));
     }
     
-    return std::make_pair(wavefront_traceback_low_mem(seq1, seq2, scores, prune_diff, wf_bank), s);
+    int64_t traceback_s, traceback_d;
+    if (Local) {
+        traceback_d = opt_diag;
+        traceback_s = opt_s;
+        s = opt_s;
+    }
+    else {
+        traceback_d = seq1.size() - seq2.size();
+        traceback_s = s;
+    }
+    
+    return std::make_pair(wavefront_traceback_low_mem<Local>(seq1, seq2, scores, prune_diff,
+                                                             wf_bank, traceback_s, traceback_d), s);
 }
 
 inline std::pair<WFScores, bool> convert_score_params(const SWGScores& scores) {
@@ -1079,7 +1172,8 @@ wavefront_align_local_core(const std::string& seq1, const std::string& seq2,
         // align the anchor
         StringView anchor1(seq1, anchor_begin_1, anchor_end_1 - anchor_begin_1);
         StringView anchor2(seq2, anchor_begin_2, anchor_end_2 - anchor_begin_2);
-        auto anchor_res = global_wfa(pref1, pref2, wf_scores, -1, 0);
+        
+        auto anchor_res = global_wfa(anchor1, anchor2, wf_scores, -1, 0);
         
         // get the score and add to the CIGAR
         anchor_score = convert_score(scores, anchor_end_1 - anchor_begin_1,
@@ -1107,9 +1201,12 @@ wavefront_align_local_core(const std::string& seq1, const std::string& seq2,
     auto aligned_suff_len = cigar_base_length(suff_result.first);
     int32_t suff_score = convert_score(scores, aligned_suff_len.first, aligned_suff_len.second,
                                        even, suff_result.second);
+    
     for (auto& op : suff_result.first) {
         cigar.emplace_back(std::move(op));
     }
+    
+    // CIGAR operations might not be merged over the boundaries
     coalesce_cigar(cigar);
     return std::make_tuple(std::move(cigar),
                            pref_score + anchor_score + suff_score,
@@ -1118,7 +1215,6 @@ wavefront_align_local_core(const std::string& seq1, const std::string& seq2,
                            std::make_pair(anchor_begin_2 - aligned_pref_len.second,
                                           anchor_end_2 + aligned_suff_len.second));
 }
-
 
 struct StandardGlobalWFA {
     StandardGlobalWFA() = default;
@@ -1139,6 +1235,28 @@ struct StandardSemilocalWFA {
     operator()(const StringType& seq1, const StringType& seq2,
                const WFScores& scores, int32_t prune_diff, int32_t match_score) const {
         return internal::wavefront_align_core<true>(seq1, seq2, scores, prune_diff, match_score);
+    }
+};
+
+struct LowMemGlobalWFA {
+    LowMemGlobalWFA() = default;
+    
+    template<typename StringType>
+    inline std::pair<std::vector<CIGAROp>, int32_t>
+    operator()(const StringType& seq1, const StringType& seq2,
+               const WFScores& scores, int32_t prune_diff, int32_t match_score) const {
+        return internal::wavefront_align_low_mem_core<false>(seq1, seq2, scores, prune_diff, match_score);
+    }
+};
+
+struct LowMemSemilocalWFA {
+    LowMemSemilocalWFA() = default;
+    
+    template<typename StringType>
+    inline std::pair<std::vector<CIGAROp>, int32_t>
+    operator()(const StringType& seq1, const StringType& seq2,
+               const WFScores& scores, int32_t prune_diff, int32_t match_score) const {
+        return internal::wavefront_align_low_mem_core<true>(seq1, seq2, scores, prune_diff, match_score);
     }
 };
 
@@ -1172,7 +1290,7 @@ inline
 std::pair<std::vector<CIGAROp>, int32_t>
 wavefront_align_low_mem(const std::string& seq1, const std::string& seq2,
                         const WFScores& scores, int32_t prune_diff) {
-    return internal::wavefront_align_low_mem_core(seq1, seq2, scores, prune_diff);
+    return internal::wavefront_align_low_mem_core<false>(seq1, seq2, scores, prune_diff, 0);
 }
 
 
@@ -1206,7 +1324,7 @@ wavefront_align_low_mem(const std::string& seq1, const std::string& seq2,
     std::tie(wf_scores, even) = internal::convert_score_params(scores);
     
     // do the alignment
-    auto result = internal::wavefront_align_low_mem_core(seq1, seq2, wf_scores, prune_diff);
+    auto result = internal::wavefront_align_low_mem_core<false>(seq1, seq2, wf_scores, prune_diff, 0);
     
     // convert the score back to SWG params
     result.second = internal::convert_score(scores, seq1.size(), seq2.size(), even, result.second);
@@ -1220,15 +1338,27 @@ wavefront_align_local(const std::string& seq1, const std::string& seq2,
                       size_t anchor_begin_1, size_t anchor_end_1,
                       size_t anchor_begin_2, size_t anchor_end_2,
                       const SWGScores& scores, bool anchor_is_match) {
-    
-    internal::StandardGlobalWFA global_wfa;
-    internal::StandardSemilocalWFA semilocal_wfa;
+    return internal::wavefront_align_local_core(seq1, seq2,
+                                                anchor_begin_1, anchor_end_1,
+                                                anchor_begin_2, anchor_end_2,
+                                                scores, anchor_is_match,
+                                                internal::StandardGlobalWFA(),
+                                                internal::StandardSemilocalWFA());
+}
+
+inline
+std::tuple<std::vector<CIGAROp>, int32_t, std::pair<size_t, size_t>, std::pair<size_t, size_t>>
+wavefront_align_local_low_mem(const std::string& seq1, const std::string& seq2,
+                              size_t anchor_begin_1, size_t anchor_end_1,
+                              size_t anchor_begin_2, size_t anchor_end_2,
+                              const SWGScores& scores, bool anchor_is_match) {
     
     return internal::wavefront_align_local_core(seq1, seq2,
                                                 anchor_begin_1, anchor_end_1,
                                                 anchor_begin_2, anchor_end_2,
                                                 scores, anchor_is_match,
-                                                global_wfa, semilocal_wfa);
+                                                internal::LowMemGlobalWFA(),
+                                                internal::LowMemSemilocalWFA());
 }
 
 }
