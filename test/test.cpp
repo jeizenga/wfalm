@@ -7,6 +7,7 @@
 #include <cassert>
 
 #include "wfa_lm.hpp"
+#include "wfa_lm_st.hpp"
 
 int score_cigar(const std::string& seq1, const std::string& seq2,
                 const std::vector<wfalm::CIGAROp>& cigar, const wfalm::WFScores& scores) {
@@ -70,26 +71,37 @@ int main(int argc, char** argv) {
     std::cout << "\te = " << gap_extend << std::endl;
     std::cout << "\tp = " << prune << std::endl;
     for (bool low_mem : {false, true}) {
-        std::pair<std::vector<wfalm::CIGAROp>, int32_t> res;
-        if (low_mem) {
-            std::cout << "low memory algorithm:" << std::endl;
-            res = wfalm::wavefront_align_low_mem(seq1, seq2, scores, prune);
+        for (bool use_st : {false, true}) {
+            std::pair<std::vector<wfalm::CIGAROp>, int32_t> res;
+            if (low_mem && use_st) {
+                std::cout << "low memory algorithm with suffix tree match:" << std::endl;
+                res = wfalm::wavefront_align_low_mem_st(seq1, seq2, scores, prune);
+            }
+            else if (low_mem) {
+                std::cout << "low memory algorithm:" << std::endl;
+                res = wfalm::wavefront_align_low_mem(seq1, seq2, scores, prune);
+            }
+            else if (use_st) {
+                std::cout << "standard algorithm with suffix tree match:" << std::endl;
+                res = wfalm::wavefront_align_st(seq1, seq2, scores, prune);
+            }
+            else {
+                std::cout << "standard algorithm:" << std::endl;
+                res = wfalm::wavefront_align(seq1, seq2, scores, prune);
+                
+            }
+            auto cigar = res.first;
+            int s = score_cigar(seq1, seq2, cigar, scores);
+            assert(s == res.second);
+            
+            std::cout << "score: " << s << std::endl;
+            std::cout << "score density: " << double(s) / double(seq1.size() + seq2.size()) << std::endl;
+            std::cout << "CIGAR string:" << std::endl;
+            for (auto cigar_op : cigar) {
+                std::cout << cigar_op.len << cigar_op.op;
+            }
+            std::cout << std::endl;
         }
-        else {
-            std::cout << "standard algorithm:" << std::endl;
-            res = wfalm::wavefront_align(seq1, seq2, scores, prune);
-        }
-        auto cigar = res.first;
-        int s = score_cigar(seq1, seq2, cigar, scores);
-        assert(s == res.second);
-
-        std::cout << "score: " << s << std::endl;
-        std::cout << "score density: " << double(s) / double(seq1.size() + seq2.size()) << std::endl;
-        std::cout << "CIGAR string:" << std::endl;
-        for (auto cigar_op : cigar) {
-            std::cout << cigar_op.len << cigar_op.op;
-        }
-        std::cout << std::endl;
     }
     
     std::string pref1 = "CACCATAAGTCAGG";
@@ -124,29 +136,45 @@ int main(int argc, char** argv) {
     std::cout << "\to = " << gap_open_sw << std::endl;
     std::cout << "\te = " << gap_extend_sw << std::endl;
     for (bool low_mem : {false, true}) {
-        std::tuple<std::vector<wfalm::CIGAROp>, int32_t, std::pair<size_t, size_t>, std::pair<size_t, size_t>> res;
-        if (low_mem) {
-            std::cout << "low memory algorithm:" << std::endl;
-            res = wfalm::wavefront_align_local_low_mem(local_seq1, local_seq2,
-                                                       anchor_begin_1, anchor_end_1,
-                                                       anchor_begin_2, anchor_end_2,
-                                                       sw_scores, false);
+        for (bool use_st : {false, true}) {
+            std::tuple<std::vector<wfalm::CIGAROp>, int32_t, std::pair<size_t, size_t>, std::pair<size_t, size_t>> res;
+            if (low_mem && use_st) {
+                std::cout << "low memory algorithm with suffix tree match:" << std::endl;
+                res = wfalm::wavefront_align_local_low_mem_st(local_seq1, local_seq2,
+                                                              anchor_begin_1, anchor_end_1,
+                                                              anchor_begin_2, anchor_end_2,
+                                                              sw_scores, false);
+            }
+            else if (low_mem) {
+                std::cout << "low memory algorithm:" << std::endl;
+                res = wfalm::wavefront_align_local_low_mem(local_seq1, local_seq2,
+                                                           anchor_begin_1, anchor_end_1,
+                                                           anchor_begin_2, anchor_end_2,
+                                                           sw_scores, false);
+            }
+            else if (use_st) {
+                std::cout << "standard algorithm with suffix tree match:" << std::endl;
+                res = wfalm::wavefront_align_local_st(local_seq1, local_seq2,
+                                                      anchor_begin_1, anchor_end_1,
+                                                      anchor_begin_2, anchor_end_2,
+                                                      sw_scores, false);
+            }
+            else {
+                std::cout << "standard algorithm:" << std::endl;
+                res = wfalm::wavefront_align_local(local_seq1, local_seq2,
+                                                   anchor_begin_1, anchor_end_1,
+                                                   anchor_begin_2, anchor_end_2,
+                                                   sw_scores, false);
+            }
+            auto cigar = std::get<0>(res);
+            
+            std::cout << "score: " << std::get<1>(res) << std::endl;
+            std::cout << "aligned intervals: s1[" << std::get<2>(res).first << ":" << std::get<2>(res).second << "], s2[" << std::get<3>(res).first << ":" << std::get<3>(res).second << "]" << std::endl;
+            std::cout << "CIGAR string:" << std::endl;
+            for (auto cigar_op : cigar) {
+                std::cout << cigar_op.len << cigar_op.op;
+            }
+            std::cout << std::endl;
         }
-        else {
-            std::cout << "standard algorithm:" << std::endl;
-            res = wfalm::wavefront_align_local(local_seq1, local_seq2,
-                                               anchor_begin_1, anchor_end_1,
-                                               anchor_begin_2, anchor_end_2,
-                                               sw_scores, false);
-        }
-        auto cigar = std::get<0>(res);
-        
-        std::cout << "score: " << std::get<1>(res) << std::endl;
-        std::cout << "aligned intervals: s1[" << std::get<2>(res).first << ":" << std::get<2>(res).second << "], s2[" << std::get<3>(res).first << ":" << std::get<3>(res).second << "]" << std::endl;
-        std::cout << "CIGAR string:" << std::endl;
-        for (auto cigar_op : cigar) {
-            std::cout << cigar_op.len << cigar_op.op;
-        }
-        std::cout << std::endl;
     }
 }
