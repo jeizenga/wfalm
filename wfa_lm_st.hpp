@@ -39,7 +39,7 @@ namespace wfalm {
 
 // Configurable for a space/speed tradeoff
 //typedef sdsl::cst_cst3<> SuffixTree;
-typedef sdsl::cst_sada<> SuffixTree;
+typedef sdsl::cst_sada<sdsl::csa_sada<sdsl::enc_vector<>, 8, 8>> SuffixTree;
 
 /// Align two sequences using the wavefront alignment algorithm, returns a CIGAR
 /// string.
