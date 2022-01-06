@@ -330,7 +330,7 @@ int main(int argc, char **argv) {
     auto align_time = duration_cast<microseconds>(end_align - begin_align);
     
     cerr << "alignment:" << endl;
-    cerr << shortened_seq(cigar_to_string(cigar), 400) << endl;
+    cerr << shortened_seq(cigar_to_string(cigar), 200) << endl;
     if (local) {
         cerr << "aligned intervals: [" << range1.first << ":" << range1.second << "] [" << range2.first << ":" << range2.second << "]" << endl;
     }

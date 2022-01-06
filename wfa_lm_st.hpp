@@ -166,12 +166,14 @@ struct STMatchFunc {
 
 // TODO: would be nice to do this with less duplication from the other header...
 
+
 inline
 std::pair<std::vector<CIGAROp>, int32_t>
 wavefront_align_st(const std::string& seq1, const std::string& seq2,
                    const WFScores& scores, int32_t prune_diff) {
-    internal::STMatchFunc<std::string> match_func(seq1, seq2);
-    return internal::wavefront_align_core<false>(seq1, seq2, scores, prune_diff, 0, match_func);
+    typedef internal::STMatchFunc<std::string> MFunc;
+    return internal::reducing_wavefront_dispatch<false, false, MFunc>(seq1, seq2,
+                                                                      scores, prune_diff, 0);
 }
 
 
@@ -179,8 +181,9 @@ inline
 std::pair<std::vector<CIGAROp>, int32_t>
 wavefront_align_low_mem_st(const std::string& seq1, const std::string& seq2,
                            const WFScores& scores, int32_t prune_diff) {
-    internal::STMatchFunc<std::string> match_func(seq1, seq2);
-    return internal::wavefront_align_low_mem_core<false>(seq1, seq2, scores, prune_diff, 0, match_func);
+    typedef internal::STMatchFunc<std::string> MFunc;
+    return internal::reducing_wavefront_dispatch<false, true, MFunc>(seq1, seq2,
+                                                                     scores, prune_diff, 0);
 }
 
 
@@ -190,16 +193,15 @@ wavefront_align_st(const std::string& seq1, const std::string& seq2,
                    const SWGScores& scores, int32_t prune_diff) {
     
     // make WFA params
-    WFScores wf_scores;
-    bool even;
-    std::tie(wf_scores, even) = internal::convert_score_params(scores);
+    WFScores wf_scores = internal::convert_score_params(scores);
     
     // do the alignment
-    internal::STMatchFunc<std::string> match_func(seq1, seq2);
-    auto result = internal::wavefront_align_core<false>(seq1, seq2, wf_scores, prune_diff, 0, match_func);
+    typedef internal::STMatchFunc<std::string> MFunc;
+    auto result = internal::reducing_wavefront_dispatch<false, false, MFunc>(seq1, seq2,
+                                                                             wf_scores, prune_diff, 0);
     
     // convert the score back to SWG params
-    result.second = internal::convert_score(scores, seq1.size(), seq2.size(), even, result.second);
+    result.second = internal::convert_score(scores, seq1.size(), seq2.size(), result.second);
     return result;
 }
 
@@ -210,16 +212,15 @@ wavefront_align_low_mem_st(const std::string& seq1, const std::string& seq2,
                            const SWGScores& scores, int32_t prune_diff) {
     
     // make WFA params
-    WFScores wf_scores;
-    bool even;
-    std::tie(wf_scores, even) = internal::convert_score_params(scores);
+    WFScores wf_scores = internal::convert_score_params(scores);
     
     // do the alignment
-    internal::STMatchFunc<std::string> match_func(seq1, seq2);
-    auto result = internal::wavefront_align_low_mem_core<false>(seq1, seq2, wf_scores, prune_diff, 0, match_func);
+    typedef internal::STMatchFunc<std::string> MFunc;
+    auto result = internal::reducing_wavefront_dispatch<false, true, MFunc>(seq1, seq2,
+                                                                            wf_scores, prune_diff, 0);
     
     // convert the score back to SWG params
-    result.second = internal::convert_score(scores, seq1.size(), seq2.size(), even, result.second);
+    result.second = internal::convert_score(scores, seq1.size(), seq2.size(), result.second);
     return result;
     
 }
