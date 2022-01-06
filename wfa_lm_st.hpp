@@ -31,15 +31,11 @@
 #include <sdsl/construct.hpp>
 #include <sdsl/cst_sada.hpp>
 #include <sdsl/cst_sct3.hpp>
+#include <sdsl/csa_bitcompressed.hpp>
 
 
 namespace wfalm {
 
-// TODO: choose better defaults for (inverse) suffix array sampling
-
-// Configurable for a space/speed tradeoff
-//typedef sdsl::cst_cst3<> SuffixTree;
-typedef sdsl::cst_sada<sdsl::csa_sada<sdsl::enc_vector<>, 8, 8>> SuffixTree;
 
 /// Align two sequences using the wavefront alignment algorithm, returns a CIGAR
 /// string.
@@ -96,6 +92,8 @@ wavefront_align_local_st(const std::string& seq1, const std::string& seq2,
 
 
 namespace internal {
+
+typedef sdsl::cst_sada<sdsl::csa_sada<sdsl::enc_vector<>, 1, 1>> SuffixTree;
 
 
 // encoding:
