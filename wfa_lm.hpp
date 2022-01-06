@@ -214,7 +214,7 @@ struct WFEntry {
 struct Wavefront {
 public:
     
-    void init_arrays() {
+    inline void init_arrays() {
         alloced = (int32_t*) malloc(3 * len * sizeof(int32_t));
         M = alloced;
         I = M + len;
@@ -231,7 +231,7 @@ public:
         }
     }
     
-    Wavefront& operator=(const Wavefront& other) noexcept {
+    inline Wavefront& operator=(const Wavefront& other) noexcept {
         if (this != &other) {
             diag_begin = other.diag_begin;
             len = other.len;
@@ -245,7 +245,7 @@ public:
         return *this;
     }
     
-    Wavefront& operator=(Wavefront&& other) noexcept {
+    inline Wavefront& operator=(Wavefront&& other) noexcept {
         if (this != &other) {
             diag_begin = other.diag_begin;
             len = other.len;
@@ -272,7 +272,7 @@ public:
         free(alloced);
     }
     
-    void pop_front() {
+    inline void pop_front() {
         ++M;
         ++I;
         ++D;
@@ -280,7 +280,7 @@ public:
         --len;
     }
     
-    void pop_back() {
+    inline void pop_back() {
         --len;
     }
     
@@ -1175,20 +1175,15 @@ wavefront_align_low_mem_core(const StringType& seq1, const StringType& seq2,
 // TODO: this is in the STL in c++17
 uint32_t gcd(uint32_t a, uint32_t b) {
     // euclid's algorithm
-    if (a == 0) {
+    if (a < b) {
+        std::swap(a, b);
+    }
+    auto r = a % b;
+    if (r == 0) {
         return b;
     }
-    else if (b == 0) {
-        return a;
-    }
-    else if (a == b) {
-        return a;
-    }
-    else if (a > b) {
-        return gcd(a-b, b);
-    }
     else {
-        return gcd(a, b-a);
+        return gcd(b, r);
     }
 }
 
