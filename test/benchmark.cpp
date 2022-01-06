@@ -103,6 +103,10 @@ string parse_fasta(const string& fasta_name, string& seq_name) {
     string line;
     
     ifstream strm(fasta_name);
+    if (!strm) {
+        cerr << "ERROR: failed to open " << fasta_name << endl;
+        exit(1);
+    }
     bool seen_header = false;
     while (strm) {
         line.clear();
