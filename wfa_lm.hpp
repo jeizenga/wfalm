@@ -210,30 +210,109 @@ struct WFEntry {
     int32_t D;
 };
 
-// TODO: replace deque with manual pointers? (will need to implement ctors)
+// TODO: use posix_memalign?
 struct Wavefront {
 public:
-    Wavefront() {}
-    Wavefront(int32_t diag_begin, int32_t diag_end)
-    : diag_begin(diag_begin), entries(diag_end - diag_begin) {
-        
+    
+    void init_arrays() {
+        alloced = (int32_t*) malloc(3 * len * sizeof(int32_t));
+        M = alloced;
+        I = M + len;
+        D = I + len;
     }
     
+    Wavefront() {}
+    Wavefront(int32_t diag_begin, int32_t diag_end)
+    : diag_begin(diag_begin), len(diag_end - diag_begin)
+    {
+        init_arrays();
+        for (int32_t i = 0, n = 3 * len; i < n; ++i) {
+            alloced[i] = std::numeric_limits<int32_t>::min();
+        }
+    }
+    
+    
+    Wavefront& operator=(const Wavefront& other) noexcept {
+        if (this != &other) {
+            diag_begin = other.diag_begin;
+            len = other.len;
+            init_arrays();
+            for (int32_t i = 0; i < len; ++i) {
+                M[i] = other.M[i];
+                I[i] = other.I[i];
+                D[i] = other.D[i];
+            }
+        }
+        return *this;
+    }
+    
+    Wavefront& operator=(Wavefront&& other) noexcept {
+        if (this != &other) {
+            diag_begin = other.diag_begin;
+            len = other.len;
+            alloced = other.alloced;
+            M = other.M;
+            I = other.I;
+            D = other.D;
+            
+            other.alloced = other.M = other.I = other.D = nullptr;
+            other.len = 0;
+        }
+        return *this;
+    }
+    
+    Wavefront(const Wavefront& other) noexcept {
+        *this = other;
+    }
+    
+    Wavefront(Wavefront&& other) noexcept {
+        *this = std::move(other);
+    }
+    
+    ~Wavefront() {
+        free(alloced);
+    }
+    
+    void pop_front() {
+        ++M;
+        ++I;
+        ++D;
+        ++diag_begin;
+        --len;
+    }
+    
+    void pop_back() {
+        --len;
+    }
+    
+    inline int64_t size() const {
+        return len;
+    }
+    
+    inline bool empty() const {
+        return len == 0;
+    }
+    
+    int32_t* alloced;
+    int32_t* M;
+    int32_t* I;
+    int32_t* D;
+    
     int32_t diag_begin;
-    std::deque<WFEntry> entries;
+    int32_t len;
 };
 
 template<typename StringType, typename MatchFunc>
 void wavefront_extend(const StringType& seq1, const StringType& seq2,
                       Wavefront& wf, const MatchFunc& match_func) {
     
-    for (int64_t k = 0; k < wf.entries.size(); ++k) {
+    for (int64_t k = 0; k < wf.size(); ++k) {
         int64_t diag = wf.diag_begin + k;
-        int64_t anti_diag = wf.entries[k].M;
+        int64_t anti_diag = wf.M[k];
         int64_t i = (diag + anti_diag) / 2 + 1;
         int64_t j = (anti_diag - diag) / 2 + 1;
         if (i >= 0 && j >= 0) {
-            wf.entries[k].M += 2 * match_func(i, j);
+            wf.M[k] += 2 * match_func(i, j);
         }
     }
 }
@@ -248,9 +327,9 @@ Wavefront wavefront_next(const StringType& seq1, const StringType& seq2,
     // mismatch stays in the same diagonals
     if (wfs.size() >= scores.mismatch) {
         const auto& wf_prev = wfs[wfs.size() - scores.mismatch];
-        if (!wf_prev.entries.empty()) {
+        if (!wf_prev.empty()) {
             lo = std::min<int32_t>(lo, wf_prev.diag_begin);
-            hi = std::max<int32_t>(hi, wf_prev.diag_begin + (int64_t) wf_prev.entries.size());
+            hi = std::max<int32_t>(hi, wf_prev.diag_begin + (int64_t) wf_prev.size());
         }
     }
     // TODO: but sometimes these bounds are slightly too large because of the gap extend
@@ -259,9 +338,9 @@ Wavefront wavefront_next(const StringType& seq1, const StringType& seq2,
     for (auto s_back : {scores.gap_extend, scores.gap_open + scores.gap_extend}) {
         if (wfs.size() >= s_back) {
             const auto& wf_prev = wfs[wfs.size() - s_back];
-            if (!wf_prev.entries.empty()) {
+            if (!wf_prev.empty()) {
                 lo = std::min<int32_t>(lo, wf_prev.diag_begin - 1);
-                hi = std::max<int32_t>(hi, wf_prev.diag_begin + (int64_t) wf_prev.entries.size() + 1);
+                hi = std::max<int32_t>(hi, wf_prev.diag_begin + (int64_t) wf_prev.size() + 1);
             }
         }
     }
@@ -285,16 +364,16 @@ Wavefront wavefront_next(const StringType& seq1, const StringType& seq2,
         if (wfs.size() >= scores.gap_extend + scores.gap_open) {
             const auto& wf_prev = wfs[wfs.size() - scores.gap_extend - scores.gap_open];
             for (auto k = lo; k < hi; ++k) {
-                if (k - 1 >= wf_prev.diag_begin && k - 1 < wf_prev.diag_begin + (int64_t) wf_prev.entries.size()) {
-                    int64_t a = wf_prev.entries[k - 1 - wf_prev.diag_begin].M + 1;
+                if (k - 1 >= wf_prev.diag_begin && k - 1 < wf_prev.diag_begin + (int64_t) wf_prev.size()) {
+                    int64_t a = wf_prev.M[k - 1 - wf_prev.diag_begin] + 1;
                     if ((a + k) / 2 < (int64_t) seq1.size() && (a - k) / 2 < (int64_t) seq2.size()) {
-                        wf.entries[k - lo].I = a;
+                        wf.I[k - lo] = a;
                     }
                 }
-                if (k + 1 >= wf_prev.diag_begin && k + 1 < wf_prev.diag_begin + (int64_t) wf_prev.entries.size()) {
-                    int64_t a = wf_prev.entries[k + 1 - wf_prev.diag_begin].M + 1;
+                if (k + 1 >= wf_prev.diag_begin && k + 1 < wf_prev.diag_begin + (int64_t) wf_prev.size()) {
+                    int64_t a = wf_prev.M[k + 1 - wf_prev.diag_begin] + 1;
                     if ((a + k) / 2 < (int64_t) seq1.size() && (a - k) / 2 < (int64_t) seq2.size()) {
-                        wf.entries[k - lo].D = a;
+                        wf.D[k - lo] = a;
                     }
                 }
             }
@@ -304,16 +383,16 @@ Wavefront wavefront_next(const StringType& seq1, const StringType& seq2,
         if (wfs.size() >= scores.gap_extend) {
             const auto& wf_prev = wfs[wfs.size() - scores.gap_extend];
             for (auto k = lo; k < hi; ++k) {
-                if (k - 1 >= wf_prev.diag_begin && k - 1 < wf_prev.diag_begin + (int64_t) wf_prev.entries.size()) {
-                    int64_t a = wf_prev.entries[k - 1 - wf_prev.diag_begin].I + 1;
+                if (k - 1 >= wf_prev.diag_begin && k - 1 < wf_prev.diag_begin + (int64_t) wf_prev.size()) {
+                    int64_t a = wf_prev.I[k - 1 - wf_prev.diag_begin] + 1;
                     if ((a + k) / 2 < (int64_t) seq1.size() && (a - k) / 2 < (int64_t) seq2.size()) {
-                        wf.entries[k - lo].I = std::max<int32_t>(wf.entries[k - lo].I, a);
+                        wf.I[k - lo] = std::max<int32_t>(wf.I[k - lo], a);
                     }
                 }
-                if (k + 1 >= wf_prev.diag_begin && k + 1 < wf_prev.diag_begin + (int64_t) wf_prev.entries.size()) {
-                    int64_t a = wf_prev.entries[k + 1 - wf_prev.diag_begin].D + 1;
+                if (k + 1 >= wf_prev.diag_begin && k + 1 < wf_prev.diag_begin + (int64_t) wf_prev.size()) {
+                    int64_t a = wf_prev.D[k + 1 - wf_prev.diag_begin] + 1;
                     if ((a + k) / 2 < (int64_t) seq1.size() && (a - k) / 2 < (int64_t) seq2.size()) {
-                        wf.entries[k - lo].D = std::max<int32_t>(wf.entries[k - lo].D, a);
+                        wf.D[k - lo] = std::max<int32_t>(wf.D[k - lo], a);
                     }
                 }
             }
@@ -323,18 +402,18 @@ Wavefront wavefront_next(const StringType& seq1, const StringType& seq2,
         if (wfs.size() >= scores.mismatch) {
             const auto& wf_prev = wfs[wfs.size() - scores.mismatch];
             for (auto k = lo; k < hi; ++k) {
-                if (k >= wf_prev.diag_begin && k < wf_prev.diag_begin + (int64_t) wf_prev.entries.size()) {
-                    int64_t a = wf_prev.entries[k - wf_prev.diag_begin].M + 2;
+                if (k >= wf_prev.diag_begin && k < wf_prev.diag_begin + (int64_t) wf_prev.size()) {
+                    int64_t a = wf_prev.M[k - wf_prev.diag_begin] + 2;
                     if ((a + k) / 2 < (int64_t) seq1.size() && (a - k) / 2 < (int64_t) seq2.size()) {
-                        wf.entries[k - lo].M = a;
+                        wf.M[k - lo] = a;
                     }
                 }
             }
         }
         
         // calculate the opt
-        for (size_t k = 0; k < wf.entries.size(); ++k) {
-            wf.entries[k].M = std::max(wf.entries[k].M, std::max(wf.entries[k].I, wf.entries[k].D));
+        for (size_t k = 0; k < wf.size(); ++k) {
+            wf.M[k] = std::max(wf.M[k], std::max(wf.I[k], wf.D[k]));
         }
     }
     
@@ -344,27 +423,26 @@ Wavefront wavefront_next(const StringType& seq1, const StringType& seq2,
 inline
 void wavefront_prune(Wavefront& wf, int32_t sub_opt_diff) {
     
-    if (!wf.entries.empty()) {
+    if (!wf.empty()) {
         int32_t max_anti_diag = std::numeric_limits<int32_t>::min();
-        for (const auto& entry : wf.entries) {
-            max_anti_diag = std::max(max_anti_diag, entry.M);
+        for (int32_t i = 0; i < wf.size(); ++i) {
+            max_anti_diag = std::max(max_anti_diag, wf.M[i]);
         }
         
-        while (wf.entries.front().M < max_anti_diag - sub_opt_diff) {
-            wf.entries.pop_front();
-            ++wf.diag_begin;
+        while (wf.M[0] < max_anti_diag - sub_opt_diff) {
+            wf.pop_front();
         }
         
-        while (wf.entries.back().M < max_anti_diag - sub_opt_diff) {
-            wf.entries.pop_back();
+        while (wf.M[wf.len - 1] < max_anti_diag - sub_opt_diff) {
+            wf.pop_back();
         }
     }
 }
 
 inline
 bool wavefront_reached(const Wavefront& wf, int32_t diag, int32_t anti_diag) {
-    if (diag >= wf.diag_begin && diag < wf.diag_begin + wf.entries.size()) {
-        return (wf.entries[diag - wf.diag_begin].M == anti_diag);
+    if (diag >= wf.diag_begin && diag < wf.diag_begin + wf.size()) {
+        return (wf.M[diag - wf.diag_begin] == anti_diag);
     }
     return false;
 }
@@ -385,7 +463,7 @@ void wavefront_traceback_internal(const StringType& seq1, const StringType& seq2
         // we're in the match/mismatch matrix
         const auto& wf = wfs[s];
         if (mat == MAT_M) {
-            int64_t a = wf.entries[d - wf.diag_begin].M;
+            int64_t a = wf.M[d - wf.diag_begin];
             // TODO: i don't love this solution for the partial traceback problem...
             a -= 2 * lead_matches;
             lead_matches = 0;
@@ -393,7 +471,7 @@ void wavefront_traceback_internal(const StringType& seq1, const StringType& seq2
             int64_t i = (d + a) / 2;
             int64_t j = (a - d) / 2;
             while (i >= 0 && j >= 0 && seq1[i] == seq2[j]
-                   && a != wf.entries[d - wf.diag_begin].I && a != wf.entries[d - wf.diag_begin].D) {
+                   && a != wf.I[d - wf.diag_begin] && a != wf.D[d - wf.diag_begin]) {
                 op_len += 1;
                 --i;
                 --j;
@@ -405,7 +483,7 @@ void wavefront_traceback_internal(const StringType& seq1, const StringType& seq2
                 // by a wf_next, so we skip that part of the traceback
                 break;
             }
-            if (a == wf.entries[d - wf.diag_begin].I) {
+            if (a == wf.I[d - wf.diag_begin]) {
                 // this is where an insertion closed
                 if (op_len != 0) {
                     cigar.emplace_back('M', op_len);
@@ -415,7 +493,7 @@ void wavefront_traceback_internal(const StringType& seq1, const StringType& seq2
                 lead_matches = 0;
                 continue;
             }
-            else if (a == wf.entries[d - wf.diag_begin].D) {
+            else if (a == wf.D[d - wf.diag_begin]) {
                 // this is where a deletion closed
                 if (op_len != 0) {
                     cigar.emplace_back('M', op_len);
@@ -440,8 +518,8 @@ void wavefront_traceback_internal(const StringType& seq1, const StringType& seq2
             // we're in the insertion matrix
             if (s >= scores.gap_extend) {
                 const auto& wf_prev = wfs[s - scores.gap_extend];
-                if (d - 1 >= wf_prev.diag_begin && d - 1 < wf_prev.diag_begin + (int64_t) wf_prev.entries.size()) {
-                    if (wf.entries[d - wf.diag_begin].I == wf_prev.entries[d - 1 - wf_prev.diag_begin].I + 1) {
+                if (d - 1 >= wf_prev.diag_begin && d - 1 < wf_prev.diag_begin + (int64_t) wf_prev.size()) {
+                    if (wf.I[d - wf.diag_begin] == wf_prev.I[d - 1 - wf_prev.diag_begin] + 1) {
                         // an insert extended here
                         s -= scores.gap_extend;
                         op_len += 1;
@@ -452,8 +530,8 @@ void wavefront_traceback_internal(const StringType& seq1, const StringType& seq2
             }
             if (s >= scores.gap_extend + scores.gap_open) {
                 const auto& wf_prev = wfs[s - scores.gap_extend - scores.gap_open];
-                if (d - 1 >= wf_prev.diag_begin  && d - 1 < wf_prev.diag_begin + (int64_t) wf_prev.entries.size()) {
-                    if (wf.entries[d - wf.diag_begin].I == wf_prev.entries[d - 1 - wf_prev.diag_begin].M + 1) {
+                if (d - 1 >= wf_prev.diag_begin  && d - 1 < wf_prev.diag_begin + (int64_t) wf_prev.size()) {
+                    if (wf.I[d - wf.diag_begin] == wf_prev.M[d - 1 - wf_prev.diag_begin] + 1) {
                         // an insert opened here
                         s -= scores.gap_extend + scores.gap_open;
                         op_len += 1;
@@ -473,8 +551,8 @@ void wavefront_traceback_internal(const StringType& seq1, const StringType& seq2
             // we're in the deletion matrix
             if (s >= scores.gap_extend) {
                 const auto& wf_prev = wfs[s - scores.gap_extend];
-                if (d + 1 >= wf_prev.diag_begin && d + 1 < wf_prev.diag_begin + (int64_t) wf_prev.entries.size()) {
-                    if (wf.entries[d - wf.diag_begin].D == wf_prev.entries[d + 1 - wf_prev.diag_begin].D + 1) {
+                if (d + 1 >= wf_prev.diag_begin && d + 1 < wf_prev.diag_begin + (int64_t) wf_prev.size()) {
+                    if (wf.D[d - wf.diag_begin] == wf_prev.D[d + 1 - wf_prev.diag_begin] + 1) {
                         // a deletion extended here
                         s -= scores.gap_extend;
                         op_len += 1;
@@ -485,8 +563,8 @@ void wavefront_traceback_internal(const StringType& seq1, const StringType& seq2
             }
             if (s >= scores.gap_extend + scores.gap_open) {
                 const auto& wf_prev = wfs[s - scores.gap_extend - scores.gap_open];
-                if (d + 1 >= wf_prev.diag_begin && d + 1 < wf_prev.diag_begin + (int64_t) wf_prev.entries.size()){
-                    if (wf.entries[d - wf.diag_begin].D == wf_prev.entries[d + 1 - wf_prev.diag_begin].M + 1) {
+                if (d + 1 >= wf_prev.diag_begin && d + 1 < wf_prev.diag_begin + (int64_t) wf_prev.size()){
+                    if (wf.D[d - wf.diag_begin] == wf_prev.M[d + 1 - wf_prev.diag_begin] + 1) {
                         // a deletion opened here
                         s -= scores.gap_extend + scores.gap_open;
                         op_len += 1;
@@ -548,8 +626,8 @@ std::string str(const StringType& str) {
 inline
 void print_wf(const Wavefront& wf, int diag_begin, int diag_end) {
     for (int d = diag_begin; d < diag_end; ++d) {
-        if (d >= wf.diag_begin && d < wf.diag_begin + (int) wf.entries.size()) {
-            int a = wf.entries[d - wf.diag_begin].M;
+        if (d >= wf.diag_begin && d < wf.diag_begin + (int) wf.size()) {
+            int a = wf.M[d - wf.diag_begin];
             if (a > -100) {
                 std::cerr << a;
             }
@@ -561,8 +639,8 @@ void print_wf(const Wavefront& wf, int diag_begin, int diag_end) {
     }
     std::cerr << std::endl;
     for (int d = diag_begin; d < diag_end; ++d) {
-        if (d >= wf.diag_begin && d < wf.diag_begin + (int) wf.entries.size()) {
-            int a = wf.entries[d - wf.diag_begin].I;
+        if (d >= wf.diag_begin && d < wf.diag_begin + (int) wf.size()) {
+            int a = wf.I[d - wf.diag_begin];
             if (a > -100) {
                 std::cerr << a;
             }
@@ -574,8 +652,8 @@ void print_wf(const Wavefront& wf, int diag_begin, int diag_end) {
     }
     std::cerr << std::endl;
     for (int d = diag_begin; d < diag_end; ++d) {
-        if (d >= wf.diag_begin && d < wf.diag_begin + (int) wf.entries.size()) {
-            int a = wf.entries[d - wf.diag_begin].D;
+        if (d >= wf.diag_begin && d < wf.diag_begin + (int) wf.size()) {
+            int a = wf.D[d - wf.diag_begin];
             if (a > -100) {
                 std::cerr << a;
             }
@@ -594,7 +672,7 @@ void print_wfs(const WFVector& wfs) {
     int max_end = std::numeric_limits<int>::min();
     for (int s = 0; s < wfs.size(); ++s) {
         min_begin = std::min<int>(wfs[s].diag_begin, min_begin);
-        max_end = std::max<int>(wfs[s].diag_begin + wfs[s].entries.size(), max_end);
+        max_end = std::max<int>(wfs[s].diag_begin + wfs[s].size(), max_end);
     }
     std::cerr << "# print wfs #" << std::endl;
     for (int d = min_begin; d < max_end; ++d) {
@@ -614,11 +692,11 @@ void print_wfs_low_mem(const std::vector<std::pair<int32_t, Wavefront>>& wf_bank
     int max_end = std::numeric_limits<int>::min();
     for (int i = 0; i < wf_bank.size(); ++i) {
         min_begin = std::min<int>(wf_bank[i].second.diag_begin, min_begin);
-        max_end = std::max<int>(wf_bank[i].second.diag_begin + wf_bank[i].second.entries.size(), max_end);
+        max_end = std::max<int>(wf_bank[i].second.diag_begin + wf_bank[i].second.size(), max_end);
     }
     for (int i = 0; i < wf_buffer.size(); ++i) {
         min_begin = std::min<int>(wf_buffer[i].diag_begin, min_begin);
-        max_end = std::max<int>(wf_buffer[i].diag_begin + wf_buffer[i].entries.size(), max_end);
+        max_end = std::max<int>(wf_buffer[i].diag_begin + wf_buffer[i].size(), max_end);
     }
     std::cerr << "### print wf bank ###" << std::endl;
     for (int d = min_begin; d < max_end; ++d) {
@@ -663,7 +741,7 @@ void print_wfs_tb(const std::deque<Wavefront>& traceback_block,
     int max_end = std::numeric_limits<int>::min();
     for (int k = 0; k < traceback_block.size(); ++k) {
         min_begin = std::min<int>(min_begin, traceback_block[k].diag_begin);
-        max_end = std::max<int>(max_end, traceback_block[k].diag_begin + traceback_block[k].entries.size());
+        max_end = std::max<int>(max_end, traceback_block[k].diag_begin + traceback_block[k].size());
     }
     for (int d = min_begin; d < max_end; ++d) {
         std::cerr << d << "\t";
@@ -683,16 +761,16 @@ void wavefront_viz(const StringType& seq1, const StringType& seq2,
     
     for (int s = 0; s < wfs.size(); ++s) {
         const auto& wf = wfs[s];
-        for (int k = 0; k < wf.entries.size(); ++k) {
+        for (int k = 0; k < wf.size(); ++k) {
             int d = wf.diag_begin + k;
-            int a = wf.entries[k].M;
+            int a = wf.M[k];
             if (a < -2) {
                 continue;
             }
             int i = (a + d) / 2;
             int j = (a - d) / 2;
             while (i >= 0 && j >= 0 && i < seq1.size() && j < seq2.size() && seq1[i] == seq2[j]
-                   && a != wf.entries[k].I && a != wf.entries[k].D) {
+                   && a != wf.I[k] && a != wf.D[k]) {
                 matrix[i + 1][j + 1] = s;
                 --i;
                 --j;
@@ -890,10 +968,10 @@ void find_local_opt(const StringType& seq1, const StringType& seq2,
                     int64_t s, const Wavefront& wf, int32_t match_score,
                     int64_t& opt, int64_t& opt_diag, int64_t& opt_s, size_t& max_s) {
     
-    for (int64_t k = 0; k < wf.entries.size(); ++k) {
+    for (int64_t k = 0; k < wf.size(); ++k) {
         // the score of the corresponding local alignment
         // note: have to add 2 because i decided to start the DP at -2, sigh...
-        auto a = wf.entries[k].M + 2;
+        auto a = wf.M[k] + 2;
         int32_t local_s = match_score * a - s;
         if (local_s > opt && a >= std::abs(wf.diag_begin + k)) {
             // we found a new best that is inside the matrix
@@ -930,7 +1008,7 @@ wavefront_align_core(const StringType& seq1, const StringType& seq2,
     
     // init wavefront to the upper left of both sequences' starts
     std::vector<Wavefront> wfs(1, Wavefront(0, 1));
-    wfs.back().entries[0].M = -2;
+    wfs.back().M[0] = -2;
     
     // do wavefront iterations until hit max score or alignment finishes
     wavefront_extend(seq1, seq2, wfs.front(), match_func);
@@ -1014,7 +1092,7 @@ wavefront_align_low_mem_core(const StringType& seq1, const StringType& seq2,
     
     // init wavefront to the upper left of both sequences' starts
     std::deque<Wavefront> wf_buffer(1, Wavefront(0, 1));
-    wf_buffer.back().entries[0].M = -2;
+    wf_buffer.back().M[0] = -2;
     size_t s = 0;
     
     // the wavefronts we've decided to keep after they leave the buffer
