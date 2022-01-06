@@ -29,6 +29,7 @@
 #include <algorithm>
 #include <string>
 #include <chrono>
+#include <cassert>
 #include <sys/resource.h>
 
 #include "wfa_lm.hpp"
