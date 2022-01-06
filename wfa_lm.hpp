@@ -231,7 +231,6 @@ public:
         }
     }
     
-    
     Wavefront& operator=(const Wavefront& other) noexcept {
         if (this != &other) {
             diag_begin = other.diag_begin;
@@ -303,6 +302,7 @@ public:
 };
 
 template<typename StringType, typename MatchFunc>
+inline
 void wavefront_extend(const StringType& seq1, const StringType& seq2,
                       Wavefront& wf, const MatchFunc& match_func) {
     
@@ -318,6 +318,7 @@ void wavefront_extend(const StringType& seq1, const StringType& seq2,
 }
 
 template<typename WFVector, typename StringType>
+inline
 Wavefront wavefront_next(const StringType& seq1, const StringType& seq2,
                          const WFScores& scores, const WFVector& wfs) {
     
@@ -454,9 +455,6 @@ void wavefront_traceback_internal(const StringType& seq1, const StringType& seq2
                                   const WFScores& scores, const WFVector& wfs,
                                   int64_t& d, int64_t& lead_matches, WFMatrix_t& mat, int64_t& s,
                                   std::vector<CIGAROp>& cigar) {
-        
-    // TODO: traceback is O(N + M) even with suffix tree, but backpointers
-    // could make it O(s). should i do that?
     
     uint32_t op_len = 0;
     while (true) {
@@ -597,6 +595,7 @@ void wavefront_traceback_internal(const StringType& seq1, const StringType& seq2
 }
 
 template <typename StringType>
+inline
 std::vector<CIGAROp> wavefront_traceback(const StringType& seq1, const StringType& seq2,
                                          const WFScores& scores, const std::vector<Wavefront>& wfs,
                                          int64_t s, int64_t d) {
@@ -805,7 +804,7 @@ void wavefront_viz(const StringType& seq1, const StringType& seq2,
 } // end namespace debug
 
 // merge all adjacent, equivalent operations
-void coalesce_cigar(std::vector<CIGAROp>& cigar) {
+inline void coalesce_cigar(std::vector<CIGAROp>& cigar) {
     size_t into = 0;
     for (size_t j = 1; j < cigar.size(); ++j) {
         if (cigar[j].op == cigar[into].op) {
@@ -964,6 +963,7 @@ std::vector<CIGAROp> wavefront_traceback_low_mem(const StringType& seq1, const S
 }
 
 template<typename StringType>
+inline
 void find_local_opt(const StringType& seq1, const StringType& seq2,
                     int64_t s, const Wavefront& wf, int32_t match_score,
                     int64_t& opt, int64_t& opt_diag, int64_t& opt_s, size_t& max_s) {
@@ -1192,8 +1192,7 @@ uint32_t gcd(uint32_t a, uint32_t b) {
     }
 }
 
-std::pair<uint32_t, WFScores> reduce_score_params(const WFScores& scores) {
-    
+inline std::pair<uint32_t, WFScores> reduce_score_params(const WFScores& scores) {
     uint32_t factor = gcd(gcd(scores.mismatch, scores.gap_open), scores.gap_extend);
     return std::make_pair(factor, WFScores(scores.mismatch / factor,
                                            scores.gap_open / factor,
@@ -1211,7 +1210,7 @@ inline int32_t convert_score(const SWGScores& scores, size_t len1, size_t len2,
     return (scores.match * (len1 + len2) - score) / 2;
 }
 
-std::pair<size_t, size_t> cigar_base_length(const std::vector<CIGAROp>& cigar) {
+inline std::pair<size_t, size_t> cigar_base_length(const std::vector<CIGAROp>& cigar) {
     size_t len1 = 0, len2 = 0;
     for (const auto& c : cigar) {
         switch (c.op) {
@@ -1308,6 +1307,7 @@ wavefront_align_local_core(const std::string& seq1, const std::string& seq2,
 }
 
 template<bool Local, bool LowMem, typename MatchFunc, typename StringType>
+inline
 std::pair<std::vector<CIGAROp>, int32_t>
 reducing_wavefront_dispatch(const StringType& seq1, const StringType& seq2,
                             const WFScores& scores, int32_t prune_diff, int32_t match_score) {
