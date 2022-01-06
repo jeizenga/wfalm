@@ -114,7 +114,7 @@ string parse_fasta(const string& fasta_name, string& seq_name) {
         if (!line.empty() && line.front() == '>') {
             if (!seen_header) {
                 seq_name = line.substr(1, line.find(' ') - 1);
-                cerr << "loading sequence " << seq_name << " from " << fasta_name << endl;
+                cerr << "[progress] loading sequence " << seq_name << " from " << fasta_name << endl;
                 seen_header = true;
             }
             else {
@@ -247,12 +247,15 @@ int main(int argc, char **argv) {
     string fasta1(argv[optind++]);
     string fasta2(argv[optind++]);
     
-    cerr << "options: " << (low_memory ? "low" : "standard") << " memory, " << (compare_match ? "direct" : "suffix tree") << " match function, " << (local ? "local" : "global") << " alignment" << endl;
+    cerr << "MEMORY: " << (low_memory ? "low" : "standard") << endl;
+    cerr << "MATCH: " << (compare_match ? "direct" : "suffix tree") << endl;
+    cerr << "ALIGNMENT: " << (local ? "local" : "global") << endl;
+    cerr << "PARAMS: ";
     if (match != 0) {
         cerr << "a = " << match << ", ";
     }
     cerr << "x = " << mismatch << ", o = " << gap_open << ", e = " << gap_extend << endl;
-    cerr << "reading FASTA files " << fasta1 << " and " << fasta2 << endl;
+    cerr << "[progress] reading FASTA files " << fasta1 << " and " << fasta2 << endl;
     
     steady_clock::time_point begin_parse = steady_clock::now();
     
@@ -263,10 +266,10 @@ int main(int argc, char **argv) {
     steady_clock::time_point end_parse = steady_clock::now();
     
     auto parse_time = duration_cast<microseconds>(end_parse - begin_parse);
-    cerr << "parsing completed in " << parse_time.count() << " us" << endl;
-    cerr << "baseline memory usage " << max_memory_usage() << " KB" << endl;
+    cerr << "PARSE TIME: " << parse_time.count() << " us" << endl;
+    cerr << "BASELINE MEM: " << max_memory_usage() << " KB" << endl;
     
-    cerr << "aligning sequences '" << seqname1 << "' (length " << seq1.size() << ") and '" << seqname2 << "' (length " << seq2.size() << "):" << endl;
+    cerr << "[progress] aligning sequences '" << seqname1 << "' (length " << seq1.size() << ") and '" << seqname2 << "' (length " << seq2.size() << "):" << endl;
     cerr << shortened_seq(seq1, 50) << endl;
     cerr << shortened_seq(seq2, 50) << endl;
     
@@ -329,11 +332,11 @@ int main(int argc, char **argv) {
     steady_clock::time_point end_align = steady_clock::now();
     auto align_time = duration_cast<microseconds>(end_align - begin_align);
     
-    cerr << "alignment:" << endl;
+    cerr << "[progress] alignment:" << endl;
     cerr << shortened_seq(cigar_to_string(cigar), 200) << endl;
     if (local) {
         cerr << "aligned intervals: [" << range1.first << ":" << range1.second << "] [" << range2.first << ":" << range2.second << "]" << endl;
     }
-    cerr << "alignment completed in " << align_time.count() << " us" << endl;
+    cerr << "ALIGN TIME: " << align_time.count() << " us" << endl;
     //cerr << "memory usage " << max_memory_usage() << endl;
 }
