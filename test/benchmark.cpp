@@ -143,7 +143,7 @@ string shortened_seq(const string& seq, size_t len) {
 int64_t max_memory_usage() {
     struct rusage usage;
     getrusage(RUSAGE_SELF, &usage);
-    return 1024 * usage.ru_maxrss;
+    return usage.ru_maxrss;
 }
 
 int main(int argc, char **argv) {
@@ -259,9 +259,9 @@ int main(int argc, char **argv) {
     
     auto parse_time = duration_cast<microseconds>(end_parse - begin_parse);
     cerr << "parsing completed in " << parse_time.count() << " us" << endl;
-    //cerr << "memory usage " << max_memory_usage() << endl;
+    cerr << "baseline memory usage " << max_memory_usage() << " KB" << endl;
     
-    cerr << "aligning sequences '" << seqname1 << "' and '" << seqname2 << "':" << endl;
+    cerr << "aligning sequences '" << seqname1 << "' (length " << seq1.size() << ") and '" << seqname2 << "' (length " << seq2.size() << "):" << endl;
     cerr << shortened_seq(seq1, 50) << endl;
     cerr << shortened_seq(seq2, 50) << endl;
     
