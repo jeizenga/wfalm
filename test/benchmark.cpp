@@ -235,6 +235,7 @@ int main(int argc, char **argv) {
         print_usage();
         return 1;
     }
+    
     if (match < 0 || mismatch < 0 || gap_open < 0 || gap_extend < 0) {
         cerr << "ERROR: all scoring params must be non-negative" << endl;
         return 1;
@@ -246,6 +247,11 @@ int main(int argc, char **argv) {
     
     string fasta1(argv[optind++]);
     string fasta2(argv[optind++]);
+    
+    
+    cerr << "## BEGINNING NEW BENCHMARK ALIGNMENT ##" << endl;
+    cerr << fasta1 << endl;
+    cerr << fasta2 << endl;
     
     cerr << "MEMORY: " << (low_memory ? "low" : "standard") << endl;
     cerr << "MATCH: " << (compare_match ? "direct" : "suffix tree") << endl;

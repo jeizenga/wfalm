@@ -364,14 +364,15 @@ Wavefront wavefront_next(const StringType& seq1, const StringType& seq2,
         // open gaps
         if (wfs.size() >= scores.gap_extend + scores.gap_open) {
             const auto& wf_prev = wfs[wfs.size() - scores.gap_extend - scores.gap_open];
+            int64_t prev_diag_end = wf_prev.diag_begin + wf_prev.size();
             for (auto k = lo; k < hi; ++k) {
-                if (k - 1 >= wf_prev.diag_begin && k - 1 < wf_prev.diag_begin + (int64_t) wf_prev.size()) {
+                if (k - 1 >= wf_prev.diag_begin && k - 1 < prev_diag_end) {
                     int64_t a = wf_prev.M[k - 1 - wf_prev.diag_begin] + 1;
                     if ((a + k) / 2 < (int64_t) seq1.size() && (a - k) / 2 < (int64_t) seq2.size()) {
                         wf.I[k - lo] = a;
                     }
                 }
-                if (k + 1 >= wf_prev.diag_begin && k + 1 < wf_prev.diag_begin + (int64_t) wf_prev.size()) {
+                if (k + 1 >= wf_prev.diag_begin && k + 1 < prev_diag_end) {
                     int64_t a = wf_prev.M[k + 1 - wf_prev.diag_begin] + 1;
                     if ((a + k) / 2 < (int64_t) seq1.size() && (a - k) / 2 < (int64_t) seq2.size()) {
                         wf.D[k - lo] = a;
@@ -383,14 +384,15 @@ Wavefront wavefront_next(const StringType& seq1, const StringType& seq2,
         // extend gaps
         if (wfs.size() >= scores.gap_extend) {
             const auto& wf_prev = wfs[wfs.size() - scores.gap_extend];
+            int64_t prev_diag_end = wf_prev.diag_begin + wf_prev.size();
             for (auto k = lo; k < hi; ++k) {
-                if (k - 1 >= wf_prev.diag_begin && k - 1 < wf_prev.diag_begin + (int64_t) wf_prev.size()) {
+                if (k - 1 >= wf_prev.diag_begin && k - 1 < prev_diag_end) {
                     int64_t a = wf_prev.I[k - 1 - wf_prev.diag_begin] + 1;
                     if ((a + k) / 2 < (int64_t) seq1.size() && (a - k) / 2 < (int64_t) seq2.size()) {
                         wf.I[k - lo] = std::max<int32_t>(wf.I[k - lo], a);
                     }
                 }
-                if (k + 1 >= wf_prev.diag_begin && k + 1 < wf_prev.diag_begin + (int64_t) wf_prev.size()) {
+                if (k + 1 >= wf_prev.diag_begin && k + 1 < prev_diag_end) {
                     int64_t a = wf_prev.D[k + 1 - wf_prev.diag_begin] + 1;
                     if ((a + k) / 2 < (int64_t) seq1.size() && (a - k) / 2 < (int64_t) seq2.size()) {
                         wf.D[k - lo] = std::max<int32_t>(wf.D[k - lo], a);
@@ -402,8 +404,9 @@ Wavefront wavefront_next(const StringType& seq1, const StringType& seq2,
         // mismatches
         if (wfs.size() >= scores.mismatch) {
             const auto& wf_prev = wfs[wfs.size() - scores.mismatch];
+            int64_t prev_diag_end = wf_prev.diag_begin + wf_prev.size();
             for (auto k = lo; k < hi; ++k) {
-                if (k >= wf_prev.diag_begin && k < wf_prev.diag_begin + (int64_t) wf_prev.size()) {
+                if (k >= wf_prev.diag_begin && k < prev_diag_end) {
                     int64_t a = wf_prev.M[k - wf_prev.diag_begin] + 2;
                     if ((a + k) / 2 < (int64_t) seq1.size() && (a - k) / 2 < (int64_t) seq2.size()) {
                         wf.M[k - lo] = a;

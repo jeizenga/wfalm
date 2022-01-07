@@ -5,9 +5,7 @@ CXX ?= g++
 CPPFLAGS = -std=c++14 -m64 -g -O3 -I$(INCDIR) -I$(SDSLDIR)
 
 
-all: 
-	make test
-	make benchmark
+all: test benchmark
 
 .PHONY: clean $(INCDIR)/wfalm.hpp
 
