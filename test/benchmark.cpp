@@ -55,9 +55,9 @@ void print_usage() {
     cerr << " -c, --compare-match   compute matches by direct comparison, O(sN) time [default]" << endl;
     cerr << " -t, --suf-tree-match  compute matches with suffix tree, O(s^2 + N) time" << endl;
     cerr << " -x, --mismatch INT    mismatch score [default " << default_mismatch << "] " << endl;
-    cerr << " -o, --gap-open INT    gap open score [default " << default_mismatch << "] " << endl;
-    cerr << " -e, --gap-extend INT  gap extend score [default " << default_mismatch << "] " << endl;
-    cerr << " -a, --match INT       match score (triggers SWG-style params) [default " << default_mismatch << "] " << endl;
+    cerr << " -o, --gap-open INT    gap open score [default " << default_gap_open << "] " << endl;
+    cerr << " -e, --gap-extend INT  gap extend score [default " << default_gap_extend << "] " << endl;
+    cerr << " -a, --match INT       match score (triggers SWG-style params) [default " << default_match << "] " << endl;
     cerr << " -h, --help            print this message and exit" << endl;
 }
 

@@ -254,6 +254,8 @@ public:
             I = other.I;
             D = other.D;
             
+            // TODO: i could probably get away with only resetting the
+            // alloc'ed pointer...
             other.alloced = other.M = other.I = other.D = nullptr;
             other.len = 0;
         }
@@ -616,6 +618,8 @@ std::vector<CIGAROp> wavefront_traceback(const StringType& seq1, const StringTyp
 
 namespace debug {
 
+//#define debug_viz
+
 template<typename StringType>
 std::string str(const StringType& str) {
     std::stringstream strm;
@@ -755,11 +759,35 @@ void print_wfs_tb(const std::deque<Wavefront>& traceback_block,
     }
 }
 
-template <typename StringType>
+template <typename StringType, typename WFVector>
 void wavefront_viz(const StringType& seq1, const StringType& seq2,
-                   const std::vector<Wavefront>& wfs) {
+                   const WFVector& wfs,
+                   const WFScores& scores) {
     
     std::vector<std::vector<int>> matrix(seq1.size() + 1, std::vector<int32_t>(seq2.size() + 1, -1));
+    
+    std::vector<std::vector<bool>> opt(seq1.size() + 1, std::vector<bool>(seq2.size() + 1, false));
+    
+    
+    int32_t final_diag = seq1.size() - seq2.size();
+    int32_t final_anti_diag = seq1.size() + seq2.size() - 2;
+    
+    if (wavefront_reached(wfs[wfs.size() - 1], final_diag, final_anti_diag)) {
+        auto cigar = wavefront_traceback(seq1, seq2, wfs, wfs.size() - 1, final_diag);
+        int i = 0, j = 0;
+        opt[i][j] = true;
+        for (auto& op : cigar) {
+            for (int k = 0; k < op.len; ++k) {
+                if (op.op == 'M' || op.op == 'I') {
+                    ++i;
+                }
+                if (op.op == 'M' || op.op == 'D') {
+                    ++j;
+                }
+                opt[i][j] = true;
+            }
+        }
+    }
     
     for (int s = 0; s < wfs.size(); ++s) {
         const auto& wf = wfs[s];
@@ -782,6 +810,8 @@ void wavefront_viz(const StringType& seq1, const StringType& seq2,
         }
     }
     
+    
+    
     std::cerr << "\t";
     for (auto c : seq2) {
         std::cerr << "\t" << c;
@@ -798,6 +828,9 @@ void wavefront_viz(const StringType& seq1, const StringType& seq2,
             }
             else {
                 std::cerr << '.';
+            }
+            if (opt[i][j]) {
+                std::cerr << '*';
             }
         }
         std::cerr << std::endl;
@@ -1041,7 +1074,7 @@ wavefront_align_core(const StringType& seq1, const StringType& seq2,
     }
     
 #ifdef debug_viz
-    wavefront_viz(seq1, seq2, wfs);
+    wavefront_viz(seq1, seq2, wfs, scores);
 #endif
     
     int64_t traceback_s, traceback_d;
@@ -1220,8 +1253,10 @@ inline std::pair<size_t, size_t> cigar_base_length(const std::vector<CIGAROp>& c
                 break;
             case 'I':
                 len1 += c.len;
+                break;
             case 'D':
                 len2 += c.len;
+                break;
                 
             default:
                 break;
@@ -1313,10 +1348,10 @@ reducing_wavefront_dispatch(const StringType& seq1, const StringType& seq2,
     WFScores reduced_scores;
     std::tie(factor, reduced_scores) = internal::reduce_score_params(scores);
     MatchFunc match_func(seq1, seq2);
-    auto result = LowMem ? wavefront_align_core<Local>(seq1, seq2, reduced_scores, prune_diff,
-                                                       match_score, match_func)
-                         : wavefront_align_low_mem_core<Local>(seq1, seq2, reduced_scores, prune_diff,
-                                                               match_score, match_func);
+    auto result = LowMem ? wavefront_align_low_mem_core<Local>(seq1, seq2, reduced_scores, prune_diff,
+                                                               match_score, match_func)
+                         : wavefront_align_core<Local>(seq1, seq2, reduced_scores, prune_diff,
+                                                       match_score, match_func);
     result.second *= factor;
     return result;
 }
