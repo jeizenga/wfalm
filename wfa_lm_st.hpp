@@ -257,8 +257,8 @@ std::pair<std::vector<CIGAROp>, int32_t>
 wavefront_align_st(const std::string& seq1, const std::string& seq2,
                    const WFScores& scores, int32_t prune_diff) {
     typedef internal::STMatchFunc<std::string> MFunc;
-    return internal::reducing_wavefront_dispatch<false, false, MFunc>(seq1, seq2,
-                                                                      scores, prune_diff, 0);
+    return internal::wavefront_dispatch<false, false, MFunc>(seq1, seq2,
+                                                             scores, prune_diff, 0);
 }
 
 
@@ -267,8 +267,8 @@ std::pair<std::vector<CIGAROp>, int32_t>
 wavefront_align_low_mem_st(const std::string& seq1, const std::string& seq2,
                            const WFScores& scores, int32_t prune_diff) {
     typedef internal::STMatchFunc<std::string> MFunc;
-    return internal::reducing_wavefront_dispatch<false, true, MFunc>(seq1, seq2,
-                                                                     scores, prune_diff, 0);
+    return internal::wavefront_dispatch<false, true, MFunc>(seq1, seq2,
+                                                            scores, prune_diff, 0);
 }
 
 
@@ -282,8 +282,8 @@ wavefront_align_st(const std::string& seq1, const std::string& seq2,
     
     // do the alignment
     typedef internal::STMatchFunc<std::string> MFunc;
-    auto result = internal::reducing_wavefront_dispatch<false, false, MFunc>(seq1, seq2,
-                                                                             wf_scores, prune_diff, 0);
+    auto result = internal::wavefront_dispatch<false, false, MFunc>(seq1, seq2,
+                                                                    wf_scores, prune_diff, 0);
     
     // convert the score back to SWG params
     result.second = internal::convert_score(scores, seq1.size(), seq2.size(), result.second);
@@ -301,8 +301,8 @@ wavefront_align_low_mem_st(const std::string& seq1, const std::string& seq2,
     
     // do the alignment
     typedef internal::STMatchFunc<std::string> MFunc;
-    auto result = internal::reducing_wavefront_dispatch<false, true, MFunc>(seq1, seq2,
-                                                                            wf_scores, prune_diff, 0);
+    auto result = internal::wavefront_dispatch<false, true, MFunc>(seq1, seq2,
+                                                                   wf_scores, prune_diff, 0);
     
     // convert the score back to SWG params
     result.second = internal::convert_score(scores, seq1.size(), seq2.size(), result.second);
