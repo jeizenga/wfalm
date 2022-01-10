@@ -37,36 +37,96 @@
 namespace wfalm {
 
 
-/// Align two sequences using the wavefront alignment algorithm, returns a CIGAR
-/// string.
-/// Optionally performs pruning (if prune_diff >= 0) of diagonals that are the
-/// indicated difference behind the leading diagonal, measured in antidiagonals.
+/// Globally align two sequences using the low-memory WFA algorithm using O(s^3/2) memory.
+/// Also uses a suffix-tree matching function for O(s^2 + M + N) run time.
+///
+/// Args:
+///   seq1         First sequence to be aligned
+///   seq2         Second sequence to be aligned
+///   scores       WFA-style scoring parameters
+///   prune_diff   Optional pruning parameter. If set >= 0, will prune diagonals
+///                that fall behind the furthest reaching diagonal by prune_diff
+///                antidiagionals.
+///
+/// Return value:
+///   Pair consisting of CIGAR string for alignment and the alignment score.
 inline
 std::pair<std::vector<CIGAROp>, int32_t>
 wavefront_align_low_mem_st(const std::string& seq1, const std::string& seq2,
                            const WFScores& scores, int32_t prune_diff = -1);
 
-/// Same as above except with Smith-Waterman-Gotoh style scoring parameter
+/// Globally align two sequences using the low-memory WFA algorithm using O(s^3/2) memory.
+/// Also uses a suffix-tree matching function for O(s^2 + M + N) run time.
+///
+/// Args:
+///   seq1         First sequence to be aligned
+///   seq2         Second sequence to be aligned
+///   scores       Smith-Waterman-Gotoh-style scoring parameters
+///   prune_diff   Optional pruning parameter. If set >= 0, will prune diagonals
+///                that fall behind the furthest reaching diagonal by prune_diff
+///                antidiagionals.
+///
+/// Return value:
+///   Pair consisting of CIGAR string for alignment and the alignment score.
 inline
 std::pair<std::vector<CIGAROp>, int32_t>
 wavefront_align_low_mem_st(const std::string& seq1, const std::string& seq2,
                            const SWGScores& scores, int32_t prune_diff = -1);
 
-/// Same semantics as above, but marginally faster and with a higher memory complexity
+/// Globally align two sequences using the standard WFA algorithm using O(s^2) memory.
+/// Also uses a suffix-tree matching function for O(s^2 + M + N) run time.
+///
+/// Args:
+///   seq1         First sequence to be aligned
+///   seq2         Second sequence to be aligned
+///   scores       WFA-style scoring parameters
+///   prune_diff   Optional pruning parameter. If set >= 0, will prune diagonals
+///                that fall behind the furthest reaching diagonal by prune_diff
+///                antidiagionals.
+///
+/// Return value:
+///   Pair consisting of CIGAR string for alignment and the alignment score.
 inline
 std::pair<std::vector<CIGAROp>, int32_t>
 wavefront_align_st(const std::string& seq1, const std::string& seq2,
                    const WFScores& scores, int32_t prune_diff = -1);
 
-/// Same as above except with Smith-Waterman-Gotoh style scoring parameter
+/// Globally align two sequences using the standard WFA algorithm using O(s^2) memory.
+/// Also uses a suffix-tree matching function for O(s^2 + M + N) run time.
+///
+/// Args:
+///   seq1         First sequence to be aligned
+///   seq2         Second sequence to be aligned
+///   scores       Smith-Waterman-Gotoh-style scoring parameters
+///   prune_diff   Optional pruning parameter. If set >= 0, will prune diagonals
+///                that fall behind the furthest reaching diagonal by prune_diff
+///                antidiagionals.
+///
+/// Return value:
+///   Pair consisting of CIGAR string for alignment and the alignment score.
 inline
 std::pair<std::vector<CIGAROp>, int32_t>
 wavefront_align_st(const std::string& seq1, const std::string& seq2,
                    const SWGScores& scores, int32_t prune_diff = -1);
 
 
-/// Output includes two pairs of indexes, which correspond to the aligned intervals of
-/// the first and second sequence respectively
+/// Locally align two sequences from a seed using the low memory WFA as an
+/// alignment engine.
+/// Also uses a suffix-tree matching function for O(s^2 + M + N) run time.
+///
+/// Args:
+///   seq1             First sequence to be aligned
+///   seq2             Second sequence to be aligned
+///   anchor_begin_1   First index of the anchor on seq1
+///   anchor_end_1     Past-the-last index of the anchor on seq1
+///   anchor_begin_2   First index of the anchor on seq2
+///   anchor_end_2     Past-the-last index of the anchor on seq2
+///   scores           Smith-Waterman-Gotoh-style scoring parameters
+///   anchor_is_match  If false, the anchor sequence will be aligned, otherwise
+///                    it will be assumed to be a match
+///
+/// Return value:
+///   Pair consisting of CIGAR string for alignment and the alignment score.
 inline
 std::tuple<std::vector<CIGAROp>, int32_t, std::pair<size_t, size_t>, std::pair<size_t, size_t>>
 wavefront_align_local_low_mem_st(const std::string& seq1, const std::string& seq2,
@@ -74,6 +134,23 @@ wavefront_align_local_low_mem_st(const std::string& seq1, const std::string& seq
                                  size_t anchor_begin_2, size_t anchor_end_2,
                                  const SWGScores& scores, bool anchor_is_match = true);
 
+/// Locally align two sequences from a seed using the standard WFA as an
+/// alignment engine.
+/// Also uses a suffix-tree matching function for O(s^2 + M + N) run time.
+///
+/// Args:
+///   seq1             First sequence to be aligned
+///   seq2             Second sequence to be aligned
+///   anchor_begin_1   First index of the anchor on seq1
+///   anchor_end_1     Past-the-last index of the anchor on seq1
+///   anchor_begin_2   First index of the anchor on seq2
+///   anchor_end_2     Past-the-last index of the anchor on seq2
+///   scores           Smith-Waterman-Gotoh-style scoring parameters
+///   anchor_is_match  If false, the anchor sequence will be aligned, otherwise
+///                    it will be assumed to be a match
+///
+/// Return value:
+///   Pair consisting of CIGAR string for alignment and the alignment score.
 inline
 std::tuple<std::vector<CIGAROp>, int32_t, std::pair<size_t, size_t>, std::pair<size_t, size_t>>
 wavefront_align_local_st(const std::string& seq1, const std::string& seq2,
