@@ -851,7 +851,7 @@ void wavefront_viz(const StringType& seq1, const StringType& seq2,
                    const WFVector& wfs,
                    const WFScores& scores) {
     
-    std::vector<std::vector<int>> matrix(seq1.size() + 1, std::vector<int32_t>(seq2.size() + 1, -1));
+    std::vector<std::vector<int>> matrix(seq1.size() + 1, std::vector<int>(seq2.size() + 1, -1));
     
     std::vector<std::vector<bool>> opt(seq1.size() + 1, std::vector<bool>(seq2.size() + 1, false));
     
