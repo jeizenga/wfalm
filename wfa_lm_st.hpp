@@ -129,8 +129,8 @@ wavefront_align_st(const std::string& seq1, const std::string& seq2,
 ///   A tuple consisting of:
 ///     - CIGAR string for alignment
 ///     - the alignment score
-///     - a pair indexes indicating the interval of aligned sequence on seq1
-///     - a pair indexes indicating the interval of aligned sequence on seq2
+///     - a pair of indexes indicating the interval of aligned sequence on seq1
+///     - a pair of indexes indicating the interval of aligned sequence on seq2
 inline
 std::tuple<std::vector<CIGAROp>, int32_t, std::pair<size_t, size_t>, std::pair<size_t, size_t>>
 wavefront_align_local_low_mem_st(const std::string& seq1, const std::string& seq2,
@@ -157,8 +157,8 @@ wavefront_align_local_low_mem_st(const std::string& seq1, const std::string& seq
 ///   A tuple consisting of:
 ///     - CIGAR string for alignment
 ///     - the alignment score
-///     - a pair indexes indicating the interval of aligned sequence on seq1
-///     - a pair indexes indicating the interval of aligned sequence on seq2
+///     - a pair of indexes indicating the interval of aligned sequence on seq1
+///     - a pair of indexes indicating the interval of aligned sequence on seq2
 inline
 std::tuple<std::vector<CIGAROp>, int32_t, std::pair<size_t, size_t>, std::pair<size_t, size_t>>
 wavefront_align_local_st(const std::string& seq1, const std::string& seq2,

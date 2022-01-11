@@ -166,8 +166,8 @@ wavefront_align(const std::string& seq1, const std::string& seq2,
 ///   A tuple consisting of:
 ///     - CIGAR string for alignment
 ///     - the alignment score
-///     - a pair indexes indicating the interval of aligned sequence on seq1
-///     - a pair indexes indicating the interval of aligned sequence on seq2
+///     - a pair of indexes indicating the interval of aligned sequence on seq1
+///     - a pair of indexes indicating the interval of aligned sequence on seq2
 inline
 std::tuple<std::vector<CIGAROp>, int32_t, std::pair<size_t, size_t>, std::pair<size_t, size_t>>
 wavefront_align_local_low_mem(const std::string& seq1, const std::string& seq2,
@@ -193,8 +193,8 @@ wavefront_align_local_low_mem(const std::string& seq1, const std::string& seq2,
 ///   A tuple consisting of:
 ///     - CIGAR string for alignment
 ///     - the alignment score
-///     - a pair indexes indicating the interval of aligned sequence on seq1
-///     - a pair indexes indicating the interval of aligned sequence on seq2
+///     - a pair of indexes indicating the interval of aligned sequence on seq1
+///     - a pair of indexes indicating the interval of aligned sequence on seq2
 inline
 std::tuple<std::vector<CIGAROp>, int32_t, std::pair<size_t, size_t>, std::pair<size_t, size_t>>
 wavefront_align_local(const std::string& seq1, const std::string& seq2,
@@ -302,7 +302,7 @@ public:
     
     Wavefront() {}
     Wavefront(int32_t diag_begin, int32_t diag_end)
-    : diag_begin(diag_begin), len(diag_end - diag_begin)
+        : diag_begin(diag_begin), len(diag_end - diag_begin)
     {
         init_arrays();
         for (int32_t i = 0, n = 3 * len; i < n; ++i) {
@@ -328,6 +328,9 @@ public:
         if (this != &other) {
             diag_begin = other.diag_begin;
             len = other.len;
+            if (alloced) {
+                free(alloced);
+            }
             alloced = other.alloced;
             M = other.M;
             I = other.I;
@@ -373,13 +376,13 @@ public:
         return len == 0;
     }
     
-    IntType* alloced;
-    IntType* M;
-    IntType* I;
-    IntType* D;
+    IntType* alloced = nullptr;
+    IntType* M = nullptr;
+    IntType* I = nullptr;
+    IntType* D = nullptr;
     
-    int32_t diag_begin;
-    int32_t len;
+    int32_t diag_begin = 0;
+    int32_t len = 0;
 };
 
 template<typename StringType, typename MatchFunc, typename IntType>
