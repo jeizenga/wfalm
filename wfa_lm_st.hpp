@@ -178,7 +178,12 @@ wavefront_align_local_st(const std::string& seq1, const std::string& seq2,
 
 namespace internal {
 
-typedef sdsl::cst_sada<sdsl::csa_sada<sdsl::enc_vector<>, 1, 1>> SuffixTree;
+// configure the suffix tree we want
+typedef sdsl::cst_sada<sdsl::csa_bitcompressed<>,
+                       sdsl::lcp_support_tree2<1>, // sampling density: everything
+                       sdsl::bp_support_g<>, // more to parameterize here...
+                       sdsl::rank_support_v<10, 2>,
+                       sdsl::select_support_mcl<10, 2>> SuffixTree;
 
 
 // encoding:
