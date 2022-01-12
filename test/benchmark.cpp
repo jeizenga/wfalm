@@ -181,7 +181,7 @@ int main(int argc, char **argv) {
         };
         
         int option_index = 0;
-        c = getopt_long (argc, argv, "sml:ctx:o:e:a:h",
+        c = getopt_long (argc, argv, "smgl:ctx:o:e:a:h",
                          long_options, &option_index);
         if (c == -1){
             break;
@@ -342,6 +342,13 @@ int main(int argc, char **argv) {
     cerr << shortened_seq(cigar_to_string(cigar), 200) << endl;
     if (local) {
         cerr << "aligned intervals: [" << range1.first << ":" << range1.second << "] [" << range2.first << ":" << range2.second << "]" << endl;
+    }
+    if (match == 0) {
+        cerr << "NW/SWG SCORE: " << score << endl;
+        cerr << "WFA SCORE: " << match * (seq1.size() + seq2.size()) - 2 * score << endl;
+    }
+    else {
+        cerr << "WFA SCORE: " << score << endl;
     }
     cerr << "ALIGN TIME: " << align_time.count() << " us" << endl;
     //cerr << "memory usage " << max_memory_usage() << endl;
