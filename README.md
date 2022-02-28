@@ -14,3 +14,7 @@ The suffix tree algorithm is implemented in `wfa_lm_st.hpp`. It is also single-h
 	git submodule update --init --recursive
 	
 After that, the headers in `external/sdsl-lite/include` will also need to be included in the new project.
+
+## Citation
+
+Eizenga, JM, and Paten, B (2022) Improving the time and space complexity of the WFA algorithm and generalizing its scoring. _bioRxiv_. DOI [10.1101/2022.01.12.476087](https://doi.org/10.1101/2022.01.12.476087)
