@@ -309,19 +309,6 @@ private:
 /* For use in traceback */
 enum WFMatrix_t {MAT_M = 0, MAT_I = 1, MAT_D = 2};
 
-struct WFEntry {
-    WFEntry() :
-        M(std::numeric_limits<int32_t>::min()),
-        I(std::numeric_limits<int32_t>::min()),
-        D(std::numeric_limits<int32_t>::min())
-    {
-        
-    }
-    int32_t M;
-    int32_t I;
-    int32_t D;
-};
-
 // TODO: use posix_memalign?
 template<typename IntType>
 struct Wavefront {
@@ -429,8 +416,8 @@ void wavefront_extend(const StringType& seq1, const StringType& seq2,
     for (int64_t k = 0; k < wf.size(); ++k) {
         int64_t diag = wf.diag_begin + k;
         int64_t anti_diag = wf.M[k];
-        int64_t i = (diag + anti_diag) / 2 + 1;
-        int64_t j = (anti_diag - diag) / 2 + 1;
+        int64_t i = (diag + anti_diag) / 2;
+        int64_t j = (anti_diag - diag) / 2;
         if (i >= 0 && j >= 0) {
             wf.M[k] += 2 * match_func(i, j);
         }
@@ -488,13 +475,13 @@ Wavefront<IntType> wavefront_next(const StringType& seq1, const StringType& seq2
             for (auto k = lo; k < hi; ++k) {
                 if (k - 1 >= wf_prev.diag_begin && k - 1 < prev_diag_end) {
                     int64_t a = wf_prev.M[k - 1 - wf_prev.diag_begin] + 1;
-                    if ((a + k) / 2 < (int64_t) seq1.size() && (a - k) / 2 < (int64_t) seq2.size()) {
+                    if ((a + k) / 2 <= (int64_t) seq1.size() && (a - k) / 2 <= (int64_t) seq2.size()) {
                         wf.I[k - lo] = a;
                     }
                 }
                 if (k + 1 >= wf_prev.diag_begin && k + 1 < prev_diag_end) {
                     int64_t a = wf_prev.M[k + 1 - wf_prev.diag_begin] + 1;
-                    if ((a + k) / 2 < (int64_t) seq1.size() && (a - k) / 2 < (int64_t) seq2.size()) {
+                    if ((a + k) / 2 <= (int64_t) seq1.size() && (a - k) / 2 <= (int64_t) seq2.size()) {
                         wf.D[k - lo] = a;
                     }
                 }
@@ -508,13 +495,13 @@ Wavefront<IntType> wavefront_next(const StringType& seq1, const StringType& seq2
             for (auto k = lo; k < hi; ++k) {
                 if (k - 1 >= wf_prev.diag_begin && k - 1 < prev_diag_end) {
                     int64_t a = wf_prev.I[k - 1 - wf_prev.diag_begin] + 1;
-                    if ((a + k) / 2 < (int64_t) seq1.size() && (a - k) / 2 < (int64_t) seq2.size()) {
+                    if ((a + k) / 2 <= (int64_t) seq1.size() && (a - k) / 2 <= (int64_t) seq2.size()) {
                         wf.I[k - lo] = std::max<int32_t>(wf.I[k - lo], a);
                     }
                 }
                 if (k + 1 >= wf_prev.diag_begin && k + 1 < prev_diag_end) {
                     int64_t a = wf_prev.D[k + 1 - wf_prev.diag_begin] + 1;
-                    if ((a + k) / 2 < (int64_t) seq1.size() && (a - k) / 2 < (int64_t) seq2.size()) {
+                    if ((a + k) / 2 <= (int64_t) seq1.size() && (a - k) / 2 <= (int64_t) seq2.size()) {
                         wf.D[k - lo] = std::max<int32_t>(wf.D[k - lo], a);
                     }
                 }
@@ -528,7 +515,7 @@ Wavefront<IntType> wavefront_next(const StringType& seq1, const StringType& seq2
             for (auto k = lo; k < hi; ++k) {
                 if (k >= wf_prev.diag_begin && k < prev_diag_end) {
                     int64_t a = wf_prev.M[k - wf_prev.diag_begin] + 2;
-                    if ((a + k) / 2 < (int64_t) seq1.size() && (a - k) / 2 < (int64_t) seq2.size()) {
+                    if ((a + k) / 2 <= (int64_t) seq1.size() && (a - k) / 2 <= (int64_t) seq2.size()) {
                         wf.M[k - lo] = a;
                     }
                 }
@@ -573,168 +560,6 @@ bool wavefront_reached(const Wavefront<IntType>& wf, int32_t diag, int32_t anti_
     return false;
 }
 
-// creates the CIGAR in reverse order,
-// appends new CIGAR operations to the CIGAR string that is passed in
-template<typename WFVector, typename StringType>
-void wavefront_traceback_internal(const StringType& seq1, const StringType& seq2,
-                                  const WFScores& scores, const WFVector& wfs,
-                                  int64_t& d, int64_t& lead_matches, WFMatrix_t& mat, int64_t& s,
-                                  std::vector<CIGAROp>& cigar) {
-    
-    uint32_t op_len = 0;
-    while (true) {
-        // we're in the match/mismatch matrix
-        const auto& wf = wfs[s];
-        if (mat == MAT_M) {
-            int64_t a = wf.M[d - wf.diag_begin];
-            // TODO: i don't love this solution for the partial traceback problem...
-            a -= 2 * lead_matches;
-            lead_matches = 0;
-            // extend through any matches
-            int64_t i = (d + a) / 2;
-            int64_t j = (a - d) / 2;
-            while (i >= 0 && j >= 0 && seq1[i] == seq2[j]
-                   && a != wf.I[d - wf.diag_begin] && a != wf.D[d - wf.diag_begin]) {
-                op_len += 1;
-                --i;
-                --j;
-                a -= 2;
-                ++lead_matches;
-            }
-            if (s == 0) {
-                // this condition handles the initial wf_extend, which was not preceded
-                // by a wf_next, so we skip that part of the traceback
-                break;
-            }
-            if (a == wf.I[d - wf.diag_begin]) {
-                // this is where an insertion closed
-                if (op_len != 0) {
-                    cigar.emplace_back('M', op_len);
-                }
-                mat = MAT_I;
-                op_len = 0;
-                lead_matches = 0;
-                continue;
-            }
-            else if (a == wf.D[d - wf.diag_begin]) {
-                // this is where a deletion closed
-                if (op_len != 0) {
-                    cigar.emplace_back('M', op_len);
-                }
-                mat = MAT_D;
-                op_len = 0;
-                lead_matches = 0;
-                continue;
-            }
-            else if (s >= scores.mismatch) {
-                // this must a mismatch
-                op_len += 1;
-                s -= scores.mismatch;
-                lead_matches = 0;
-                continue;
-            }
-            // the traceback goes outside of the DP structure (should only happen
-            // in the low-memory code path)
-            break;
-        }
-        else if (mat == MAT_I) {
-            // we're in the insertion matrix
-            if (s >= scores.gap_extend) {
-                const auto& wf_prev = wfs[s - scores.gap_extend];
-                if (d - 1 >= wf_prev.diag_begin && d - 1 < wf_prev.diag_begin + (int64_t) wf_prev.size()) {
-                    if (wf.I[d - wf.diag_begin] == wf_prev.I[d - 1 - wf_prev.diag_begin] + 1) {
-                        // an insert extended here
-                        s -= scores.gap_extend;
-                        op_len += 1;
-                        d -= 1;
-                        continue;
-                    }
-                }
-            }
-            if (s >= scores.gap_extend + scores.gap_open) {
-                const auto& wf_prev = wfs[s - scores.gap_extend - scores.gap_open];
-                if (d - 1 >= wf_prev.diag_begin  && d - 1 < wf_prev.diag_begin + (int64_t) wf_prev.size()) {
-                    if (wf.I[d - wf.diag_begin] == wf_prev.M[d - 1 - wf_prev.diag_begin] + 1) {
-                        // an insert opened here
-                        s -= scores.gap_extend + scores.gap_open;
-                        op_len += 1;
-                        cigar.emplace_back('I', op_len);
-                        d -= 1;
-                        mat = MAT_M;
-                        op_len = 0;
-                        continue;
-                    }
-                }
-            }
-            // the traceback goes outside of the DP structure (should only happen
-            // in the low-memory code path)
-            break;
-        }
-        else {
-            // we're in the deletion matrix
-            if (s >= scores.gap_extend) {
-                const auto& wf_prev = wfs[s - scores.gap_extend];
-                if (d + 1 >= wf_prev.diag_begin && d + 1 < wf_prev.diag_begin + (int64_t) wf_prev.size()) {
-                    if (wf.D[d - wf.diag_begin] == wf_prev.D[d + 1 - wf_prev.diag_begin] + 1) {
-                        // a deletion extended here
-                        s -= scores.gap_extend;
-                        op_len += 1;
-                        d += 1;
-                        continue;
-                    }
-                }
-            }
-            if (s >= scores.gap_extend + scores.gap_open) {
-                const auto& wf_prev = wfs[s - scores.gap_extend - scores.gap_open];
-                if (d + 1 >= wf_prev.diag_begin && d + 1 < wf_prev.diag_begin + (int64_t) wf_prev.size()){
-                    if (wf.D[d - wf.diag_begin] == wf_prev.M[d + 1 - wf_prev.diag_begin] + 1) {
-                        // a deletion opened here
-                        s -= scores.gap_extend + scores.gap_open;
-                        op_len += 1;
-                        d += 1;
-                        cigar.emplace_back('D', op_len);
-                        mat = MAT_M;
-                        op_len = 0;
-                        continue;
-                    }
-                }
-            }
-            // the traceback goes outside of the DP structure (should only happen
-            // in the low-memory code path)
-            break;
-        }
-    }
-    
-    // handle the final operation
-    if (op_len != 0) {
-        if (mat == MAT_M) {
-            cigar.emplace_back('M', op_len);
-        }
-        else if (mat == MAT_D) {
-            cigar.emplace_back('D', op_len);
-        }
-        else {
-            cigar.emplace_back('I', op_len);
-        }
-    }
-}
-
-template <typename StringType, typename IntType>
-inline
-std::vector<CIGAROp> wavefront_traceback(const StringType& seq1, const StringType& seq2,
-                                         const WFScores& scores, const std::vector<Wavefront<IntType>>& wfs,
-                                         int64_t s, int64_t d) {
-    
-    // always begin traceback in the match matrix
-    WFMatrix_t mat = MAT_M;
-    int64_t lead_matches = 0;
-    
-    std::vector<CIGAROp> cigar;
-    wavefront_traceback_internal(seq1, seq2, scores, wfs, d, lead_matches, mat, s, cigar);
-    assert(s == 0 && d == 0 && mat == MAT_M);
-    std::reverse(cigar.begin(), cigar.end());
-    return cigar;
-}
 
 namespace debug {
 
@@ -893,7 +718,7 @@ void wavefront_viz(const StringType& seq1, const StringType& seq2,
     
     
     int32_t final_diag = seq1.size() - seq2.size();
-    int32_t final_anti_diag = seq1.size() + seq2.size() - 2;
+    int32_t final_anti_diag = seq1.size() + seq2.size();
     
     if (wavefront_reached(wfs[wfs.size() - 1], final_diag, final_anti_diag)) {
         auto cigar = wavefront_traceback(seq1, seq2, wfs, wfs.size() - 1, final_diag);
@@ -961,6 +786,169 @@ void wavefront_viz(const StringType& seq1, const StringType& seq2,
 }
 
 } // end namespace debug
+
+
+// creates the CIGAR in reverse order,
+// appends new CIGAR operations to the CIGAR string that is passed in
+template<typename WFVector, typename StringType>
+void wavefront_traceback_internal(const StringType& seq1, const StringType& seq2,
+                                  const WFScores& scores, const WFVector& wfs,
+                                  int64_t& d, int64_t& lead_matches, WFMatrix_t& mat, int64_t& s,
+                                  std::vector<CIGAROp>& cigar) {
+    uint32_t op_len = 0;
+    while (true) {
+        // we're in the match/mismatch matrix
+        const auto& wf = wfs[s];
+        if (mat == MAT_M) {
+            int64_t a = wf.M[d - wf.diag_begin];
+            // TODO: i don't love this solution for the partial traceback problem...
+            a -= 2 * lead_matches;
+            lead_matches = 0;
+            // extend through any matches
+            int64_t i = (d + a) / 2 - 1;
+            int64_t j = (a - d) / 2 - 1;
+            while (i >= 0 && j >= 0 && seq1[i] == seq2[j]
+                   && a != wf.I[d - wf.diag_begin] && a != wf.D[d - wf.diag_begin]) {
+                op_len += 1;
+                --i;
+                --j;
+                a -= 2;
+                ++lead_matches;
+            }
+            if (s == 0) {
+                // this condition handles the initial wf_extend, which was not preceded
+                // by a wf_next, so we skip that part of the traceback
+                break;
+            }
+            if (a == wf.I[d - wf.diag_begin]) {
+                // this is where an insertion closed
+                if (op_len != 0) {
+                    cigar.emplace_back('M', op_len);
+                }
+                mat = MAT_I;
+                op_len = 0;
+                lead_matches = 0;
+                continue;
+            }
+            else if (a == wf.D[d - wf.diag_begin]) {
+                // this is where a deletion closed
+                if (op_len != 0) {
+                    cigar.emplace_back('M', op_len);
+                }
+                mat = MAT_D;
+                op_len = 0;
+                lead_matches = 0;
+                continue;
+            }
+            else if (s >= scores.mismatch) {
+                // this must a mismatch
+                op_len += 1;
+                s -= scores.mismatch;
+                lead_matches = 0;
+                continue;
+            }
+            // the traceback goes outside of the DP structure (should only happen
+            // in the low-memory code path)
+            break;
+        }
+        else if (mat == MAT_I) {
+            // we're in the insertion matrix
+            if (s >= scores.gap_extend) {
+                const auto& wf_prev = wfs[s - scores.gap_extend];
+                if (d - 1 >= wf_prev.diag_begin && d - 1 < wf_prev.diag_begin + (int64_t) wf_prev.size()) {
+                    if (wf.I[d - wf.diag_begin] == wf_prev.I[d - 1 - wf_prev.diag_begin] + 1) {
+                        // an insert extended here
+                        s -= scores.gap_extend;
+                        op_len += 1;
+                        d -= 1;
+                        continue;
+                    }
+                }
+            }
+            if (s >= scores.gap_extend + scores.gap_open) {
+                const auto& wf_prev = wfs[s - scores.gap_extend - scores.gap_open];
+                if (d - 1 >= wf_prev.diag_begin  && d - 1 < wf_prev.diag_begin + (int64_t) wf_prev.size()) {
+                    if (wf.I[d - wf.diag_begin] == wf_prev.M[d - 1 - wf_prev.diag_begin] + 1) {
+                        // an insert opened here
+                        s -= scores.gap_extend + scores.gap_open;
+                        op_len += 1;
+                        cigar.emplace_back('I', op_len);
+                        d -= 1;
+                        mat = MAT_M;
+                        op_len = 0;
+                        continue;
+                    }
+                }
+            }
+            // the traceback goes outside of the DP structure (should only happen
+            // in the low-memory code path)
+            break;
+        }
+        else {
+            // we're in the deletion matrix
+            if (s >= scores.gap_extend) {
+                const auto& wf_prev = wfs[s - scores.gap_extend];
+                if (d + 1 >= wf_prev.diag_begin && d + 1 < wf_prev.diag_begin + (int64_t) wf_prev.size()) {
+                    if (wf.D[d - wf.diag_begin] == wf_prev.D[d + 1 - wf_prev.diag_begin] + 1) {
+                        // a deletion extended here
+                        s -= scores.gap_extend;
+                        op_len += 1;
+                        d += 1;
+                        continue;
+                    }
+                }
+            }
+            if (s >= scores.gap_extend + scores.gap_open) {
+                const auto& wf_prev = wfs[s - scores.gap_extend - scores.gap_open];
+                if (d + 1 >= wf_prev.diag_begin && d + 1 < wf_prev.diag_begin + (int64_t) wf_prev.size()){
+                    if (wf.D[d - wf.diag_begin] == wf_prev.M[d + 1 - wf_prev.diag_begin] + 1) {
+                        // a deletion opened here
+                        s -= scores.gap_extend + scores.gap_open;
+                        op_len += 1;
+                        d += 1;
+                        cigar.emplace_back('D', op_len);
+                        mat = MAT_M;
+                        op_len = 0;
+                        continue;
+                    }
+                }
+            }
+            // the traceback goes outside of the DP structure (should only happen
+            // in the low-memory code path)
+            break;
+        }
+    }
+    
+    // handle the final operation
+    if (op_len != 0) {
+        if (mat == MAT_M) {
+            cigar.emplace_back('M', op_len);
+        }
+        else if (mat == MAT_D) {
+            cigar.emplace_back('D', op_len);
+        }
+        else {
+            cigar.emplace_back('I', op_len);
+        }
+    }
+}
+
+template <typename StringType, typename IntType>
+inline
+std::vector<CIGAROp> wavefront_traceback(const StringType& seq1, const StringType& seq2,
+                                         const WFScores& scores, const std::vector<Wavefront<IntType>>& wfs,
+                                         int64_t s, int64_t d) {
+    
+    // always begin traceback in the match matrix
+    WFMatrix_t mat = MAT_M;
+    int64_t lead_matches = 0;
+    
+    std::vector<CIGAROp> cigar;
+    wavefront_traceback_internal(seq1, seq2, scores, wfs, d, lead_matches, mat, s, cigar);
+    assert(s == 0 && d == 0 && mat == MAT_M);
+    std::reverse(cigar.begin(), cigar.end());
+    return cigar;
+}
 
 
 static const int StdMem = 0;
@@ -1118,8 +1106,7 @@ void find_local_opt(const StringType& seq1, const StringType& seq2,
     
     for (int64_t k = 0; k < wf.size(); ++k) {
         // the score of the corresponding local alignment
-        // note: have to add 2 because i decided to start the DP at -2, sigh...
-        auto a = wf.M[k] + 2;
+        auto a = wf.M[k];
         int32_t local_s = match_score * a - s;
         if (local_s > opt && a >= std::abs(wf.diag_begin + k)) {
             // we found a new best that is inside the matrix
@@ -1139,7 +1126,7 @@ wavefront_align_core(const StringType& seq1, const StringType& seq2,
                      const MatchFunc& match_func) {
     
     int32_t final_diag = seq1.size() - seq2.size();
-    int32_t final_anti_diag = seq1.size() + seq2.size() - 2;
+    int32_t final_anti_diag = seq1.size() + seq2.size();
     
     // trackers used for local alignment
     int64_t opt = 0;
@@ -1151,7 +1138,7 @@ wavefront_align_core(const StringType& seq1, const StringType& seq2,
     // init wavefront to the upper left of both sequences' starts
     std::vector<Wavefront<IntType>> wfs;
     wfs.emplace_back(0, 1);
-    wfs.front().M[0] = -2;
+    wfs.front().M[0] = 0;
     
     // do wavefront iterations until hit max score or alignment finishes
     wavefront_extend(seq1, seq2, wfs.front(), match_func);
@@ -1219,7 +1206,7 @@ wavefront_align_low_mem_core(const StringType& seq1, const StringType& seq2,
     
     // use these to know when we've finished the alignment
     int32_t final_diag = seq1.size() - seq2.size();
-    int32_t final_anti_diag = seq1.size() + seq2.size() - 2;
+    int32_t final_anti_diag = seq1.size() + seq2.size();
     
     // trackers used for local alignment
     int64_t opt = 0;
@@ -1230,7 +1217,7 @@ wavefront_align_low_mem_core(const StringType& seq1, const StringType& seq2,
     // init wavefront to the upper left of both sequences' starts
     std::deque<Wavefront<IntType>> wf_buffer;
     wf_buffer.emplace_back(0, 1);
-    wf_buffer.front().M[0] = -2;
+    wf_buffer.front().M[0] = 0;
     size_t s = 0;
     
     // the wavefronts we've decided to keep after they leave the buffer
@@ -1418,12 +1405,12 @@ wavefront_align_recursive_core(const StringType& seq1, const StringType& seq2,
     
     // use these to know when we've finished the alignment
     int32_t final_diag = seq1.size() - seq2.size();
-    int32_t final_anti_diag = seq1.size() + seq2.size() - 2;
+    int32_t final_anti_diag = seq1.size() + seq2.size();
     
     // init wavefront to the upper left of both sequences' starts
     std::deque<Wavefront<IntType>> wf_buffer;
     wf_buffer.emplace_back(0, 1);
-    wf_buffer.front().M[0] = -2;
+    wf_buffer.front().M[0] = 0;
     int32_t s = 0;
     
     std::vector<Wavefront<IntType>> first_stripe;
@@ -1742,8 +1729,8 @@ struct StandardGlobalWFA {
     operator()(const StringType& seq1, const StringType& seq2,
                const WFScores& scores, int32_t prune_diff, int32_t match_score) const {
         return wavefront_dispatch<false, internal::StdMem, MatchFunc, StringType>(seq1, seq2,
-                                                                                   scores, prune_diff,
-                                                                                   match_score);
+                                                                                  scores, prune_diff,
+                                                                                  match_score);
     }
 };
 
@@ -1755,8 +1742,8 @@ struct StandardSemilocalWFA {
     operator()(const StringType& seq1, const StringType& seq2,
                const WFScores& scores, int32_t prune_diff, int32_t match_score) const {
         return wavefront_dispatch<true, internal::StdMem, MatchFunc, StringType>(seq1, seq2,
-                                                                                  scores, prune_diff,
-                                                                                  match_score);
+                                                                                 scores, prune_diff,
+                                                                                 match_score);
     }
 };
 
@@ -1768,8 +1755,8 @@ struct LowMemGlobalWFA {
     operator()(const StringType& seq1, const StringType& seq2,
                const WFScores& scores, int32_t prune_diff, int32_t match_score) const {
         return wavefront_dispatch<false, internal::LowMem, MatchFunc, StringType>(seq1, seq2,
-                                                                                   scores, prune_diff,
-                                                                                   match_score);
+                                                                                  scores, prune_diff,
+                                                                                  match_score);
     }
 };
 
