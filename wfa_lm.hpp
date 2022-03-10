@@ -78,6 +78,40 @@ struct CIGAROp {
     uint32_t len;
 };
 
+/// Globally align two sequences using the low-memory WFA algorithm using O(s log s) memory.
+///
+/// Args:
+///   seq1         First sequence to be aligned
+///   seq2         Second sequence to be aligned
+///   scores       WFA-style scoring parameters
+///   prune_diff   Optional pruning parameter. If set >= 0, will prune diagonals
+///                that fall behind the furthest reaching diagonal by prune_diff
+///                antidiagionals.
+///
+/// Return value:
+///   Pair consisting of CIGAR string for alignment and the alignment score.
+inline
+std::pair<std::vector<CIGAROp>, int32_t>
+wavefront_align_recursive(const std::string& seq1, const std::string& seq2,
+                          const WFScores& scores, int32_t prune_diff = -1);
+
+/// Globally align two sequences using the low-memory WFA algorithm using O(s log s) memory.
+///
+/// Args:
+///   seq1         First sequence to be aligned
+///   seq2         Second sequence to be aligned
+///   scores       Smith-Waterman-Gotoh-style scoring parameters
+///   prune_diff   Optional pruning parameter. If set >= 0, will prune diagonals
+///                that fall behind the furthest reaching diagonal by prune_diff
+///                antidiagionals.
+///
+/// Return value:
+///   Pair consisting of CIGAR string for alignment and the alignment score.
+inline
+std::pair<std::vector<CIGAROp>, int32_t>
+wavefront_align_recursive(const std::string& seq1, const std::string& seq2,
+                          const SWGScores& scores, int32_t prune_diff = -1);
+
 
 /// Globally align two sequences using the low-memory WFA algorithm using O(s^3/2) memory.
 ///
@@ -291,7 +325,8 @@ struct WFEntry {
 // TODO: use posix_memalign?
 template<typename IntType>
 struct Wavefront {
-public:
+    
+private:
     
     inline void init_arrays() {
         alloced = (IntType*) malloc(3 * len * sizeof(IntType));
@@ -299,6 +334,7 @@ public:
         I = M + len;
         D = I + len;
     }
+public:
     
     Wavefront() {}
     Wavefront(int32_t diag_begin, int32_t diag_end)
@@ -720,7 +756,7 @@ void print_wf(const Wavefront<IntType>& wf, int diag_begin, int diag_end) {
         if (d >= wf.diag_begin && d < wf.diag_begin + (int) wf.size()) {
             int a = wf.M[d - wf.diag_begin];
             if (a > -100) {
-                std::cerr << a;
+                std::cerr << (int) a;
             }
             else {
                 std::cerr << ".";
@@ -733,7 +769,7 @@ void print_wf(const Wavefront<IntType>& wf, int diag_begin, int diag_end) {
         if (d >= wf.diag_begin && d < wf.diag_begin + (int) wf.size()) {
             int a = wf.I[d - wf.diag_begin];
             if (a > -100) {
-                std::cerr << a;
+                std::cerr << (int) a;
             }
             else {
                 std::cerr << ".";
@@ -746,7 +782,7 @@ void print_wf(const Wavefront<IntType>& wf, int diag_begin, int diag_end) {
         if (d >= wf.diag_begin && d < wf.diag_begin + (int) wf.size()) {
             int a = wf.D[d - wf.diag_begin];
             if (a > -100) {
-                std::cerr << a;
+                std::cerr << (int) a;
             }
             else {
                 std::cerr << ".";
@@ -925,6 +961,11 @@ void wavefront_viz(const StringType& seq1, const StringType& seq2,
 }
 
 } // end namespace debug
+
+
+static const int StdMem = 0;
+static const int LowMem = 1;
+static const int Recursive = 2;
 
 // merge all adjacent, equivalent operations
 inline void coalesce_cigar(std::vector<CIGAROp>& cigar) {
@@ -1209,6 +1250,8 @@ wavefront_align_low_mem_core(const StringType& seq1, const StringType& seq2,
         auto wf_next = wavefront_next<IntType>(seq1, seq2, scores, wf_buffer);
         
         if (wf_buffer.size() >= stripe_width) {
+            // we need to evict a wavefront from the buffer to continue
+            
             // the stripe of the wavefront that is falling out of the buffer
             int32_t stripe_num = (s - stripe_width) / stripe_width;
             
@@ -1261,11 +1304,196 @@ wavefront_align_low_mem_core(const StringType& seq1, const StringType& seq2,
         traceback_s = s;
     }
     
+    
     return std::make_pair(wavefront_traceback_low_mem<Local>(seq1, seq2, scores, prune_diff,
                                                              wf_bank, traceback_s, traceback_d,
                                                              match_func),
                           s);
 }
+
+
+template<typename IntType, typename StringType, typename MatchFunc, typename WFVector1, typename WFVector2>
+void
+wavefront_align_recursive_internal(const StringType& seq1, const StringType& seq2,
+                                   const WFScores& scores, int32_t prune_diff,
+                                   int64_t lower_stripe_num, WFVector1& lower_stripe,
+                                   int64_t upper_stripe_num, WFVector2& upper_stripe,
+                                   int64_t stripe_width,
+                                   int64_t& traceback_s, int64_t& traceback_d,
+                                   WFMatrix_t& traceback_mat, int64_t& lead_matches,
+                                   std::vector<CIGAROp>& cigar,
+                                   const MatchFunc& match_func) {
+    
+    if (lower_stripe_num + 1 == upper_stripe_num) {
+        // do a step of traceback
+        
+        // collect all of the wavefronts in one vector
+        for (auto& wf : upper_stripe) {
+            lower_stripe.emplace_back(std::move(wf));
+        }
+        
+        // convert the current s into an index within this block
+        int64_t relative_s = traceback_s - lower_stripe_num * stripe_width;
+        
+        // traceback the stripe
+        wavefront_traceback_internal(seq1, seq2, scores, lower_stripe,
+                                     traceback_d, lead_matches, traceback_mat,
+                                     relative_s, cigar);
+        
+        // convert the final within-block s back into the real s
+        traceback_s = lower_stripe_num * stripe_width + relative_s;
+        
+        // we no longer need the upper stripe for anything, we can discard it
+        while (lower_stripe.size() > stripe_width) {
+            lower_stripe.pop_back();
+        }
+    }
+    else {
+        // borrow the parent call's wavefronts to do our own DP with
+        std::deque<Wavefront<IntType>> wf_buffer;
+        //wf_buffer.reserve(2 * stripe_width);
+        for (auto& wf : lower_stripe) {
+            wf_buffer.emplace_back(std::move(wf));
+        }
+        
+        // do DP out to the middle of the row interval
+        int64_t target_stripe_num = (lower_stripe_num + upper_stripe_num) / 2;
+        for (int64_t i = 0, n = stripe_width * (target_stripe_num - lower_stripe_num); i < n; ++i) {
+            // one step of DP
+            wf_buffer.emplace_back(wavefront_next<IntType>(seq1, seq2, scores, wf_buffer));
+            wavefront_extend(seq1, seq2, wf_buffer.back(), match_func);
+            if (prune_diff >= 0) {
+                // prune lagging diagonals
+                wavefront_prune(wf_buffer.back(), prune_diff);
+            }
+            
+            if (wf_buffer.size() == 2 * stripe_width) {
+                // we've completed a stripe, we can now evict the previous one
+                for (int64_t j = 0; j < stripe_width; ++j) {
+                    if (i < stripe_width) {
+                        // we're evicting the first stripe, so we have to give it back
+                        // to the parent call
+                        lower_stripe[j] = std::move(wf_buffer.front());
+                        
+                    }
+                    wf_buffer.pop_front();
+                }
+            }
+        }
+        
+        // recurse into upper half
+        wavefront_align_recursive_internal<IntType>(seq1, seq2, scores, prune_diff,
+                                                    target_stripe_num, wf_buffer,
+                                                    upper_stripe_num, upper_stripe,
+                                                    stripe_width,
+                                                    traceback_s, traceback_d,
+                                                    traceback_mat, lead_matches,
+                                                    cigar, match_func);
+        // recurse into lower half
+        wavefront_align_recursive_internal<IntType>(seq1, seq2, scores, prune_diff,
+                                                    lower_stripe_num, lower_stripe,
+                                                    target_stripe_num, wf_buffer,
+                                                    stripe_width,
+                                                    traceback_s, traceback_d,
+                                                    traceback_mat, lead_matches,
+                                                    cigar, match_func);
+    }
+}
+
+template<typename IntType, typename StringType, typename MatchFunc>
+std::pair<std::vector<CIGAROp>, int32_t>
+wavefront_align_recursive_core(const StringType& seq1, const StringType& seq2,
+                               const WFScores& scores, int32_t prune_diff,
+                               const MatchFunc& match_func) {
+    
+    if (seq1.size() + seq2.size() > std::numeric_limits<int32_t>::max()) {
+        std::stringstream strm;
+        strm << "error: WFA implementation can only align sequences of combined length < "  << std::numeric_limits<int32_t>::max() << '\n';
+        throw std::runtime_error(strm.str());
+    }
+    
+    // epoch parameters used to sub-sample wavefronts to retain
+    int64_t stripe_width = std::max(scores.mismatch,
+                                    scores.gap_open + scores.gap_extend);
+    
+    // use these to know when we've finished the alignment
+    int32_t final_diag = seq1.size() - seq2.size();
+    int32_t final_anti_diag = seq1.size() + seq2.size() - 2;
+    
+    // init wavefront to the upper left of both sequences' starts
+    std::deque<Wavefront<IntType>> wf_buffer;
+    wf_buffer.emplace_back(0, 1);
+    wf_buffer.front().M[0] = -2;
+    int32_t s = 0;
+    
+    std::vector<Wavefront<IntType>> first_stripe;
+    
+    // do wavefront iterations until hit max score or alignment finishes
+    wavefront_extend(seq1, seq2, wf_buffer.front(), match_func);
+    while (!wavefront_reached(wf_buffer.back(), final_diag, final_anti_diag)) {
+        
+        // increase score and get the next wavefront
+        ++s;
+        wf_buffer.emplace_back(wavefront_next<IntType>(seq1, seq2, scores, wf_buffer));
+        
+        if (wf_buffer.size() == 2 * stripe_width) {
+            // we need to evict a stripe wavefront from the buffer to continue
+            for (int64_t i = 0; i < stripe_width; ++i) {
+                if (s + 1 == 2 * stripe_width) {
+                    // we need to remember the first stripe when we evict it
+                    first_stripe.emplace_back(std::move(wf_buffer.front()));
+                }
+                wf_buffer.pop_front();
+            }
+            
+        }
+        
+        // follow matches
+        wavefront_extend(seq1, seq2, wf_buffer.back(), match_func);
+        
+        if (prune_diff >= 0) {
+            // prune lagging diagonals
+            wavefront_prune(wf_buffer.back(), prune_diff);
+        }
+    }
+    
+    int64_t traceback_d = final_diag;
+    int64_t traceback_s = s;
+    std::vector<CIGAROp> cigar;
+    if (s < 2 * stripe_width) {
+        // we finished the entire alignment without evicting, so we just do normal traceback
+        // TODO: i should be able to handle this with a template, but it's having trouble with
+        // type inference...
+        std::vector<Wavefront<IntType>> traceback_wfs;
+        traceback_wfs.reserve(wf_buffer.size());
+        for (auto& wf : wf_buffer) {
+            traceback_wfs.emplace_back(std::move(wf));
+        }
+        cigar = wavefront_traceback(seq1, seq2, scores, traceback_wfs,
+                                    traceback_s, traceback_d);
+    }
+    else {
+        // we enter the recursive portion of the algorithm
+        int64_t stripe_num = (s - wf_buffer.size() + stripe_width) / stripe_width; // s+1 and w-1 cancel out
+        WFMatrix_t traceback_mat = MAT_M;
+        int64_t lead_matches = 0;
+        wavefront_align_recursive_internal<IntType>(seq1, seq2,
+                                                    scores, prune_diff,
+                                                    0, first_stripe,
+                                                    stripe_num, wf_buffer,
+                                                    stripe_width,
+                                                    traceback_s, traceback_d,
+                                                    traceback_mat, lead_matches,
+                                                    cigar, match_func);
+        assert(traceback_s == 0 && traceback_d == 0 && traceback_mat == MAT_M);
+        // the CIGAR is constructed in reverse, unreverse it
+        std::reverse(cigar.begin(), cigar.end());
+    }
+    
+    
+    return std::make_pair(cigar, s);
+}
+
 
 // TODO: this is in the STL in c++17
 uint32_t gcd(uint32_t a, uint32_t b) {
@@ -1401,11 +1629,15 @@ wavefront_align_local_core(const std::string& seq1, const std::string& seq2,
 /*
  * the central routine that is configured by all of the user-facing functions using templates
  */
-template<bool Local, bool LowMem, typename MatchFunc, typename StringType>
+template<bool Local, int Mem, typename MatchFunc, typename StringType>
 inline
 std::pair<std::vector<CIGAROp>, int32_t>
 wavefront_dispatch(const StringType& seq1, const StringType& seq2,
                    const WFScores& scores, int32_t prune_diff, int32_t match_score) {
+    
+    // this is not yet implemented
+    static_assert(!(Local && Mem == internal::Recursive), "Recursive local alignment not yet implemented");
+    
     // try to reduce the scores to reduce the complexity
     uint32_t factor;
     WFScores reduced_scores;
@@ -1418,22 +1650,58 @@ wavefront_dispatch(const StringType& seq1, const StringType& seq2,
     std::pair<std::vector<CIGAROp>, int32_t> result;
     size_t max_anti_diag = seq1.size() + seq2.size();
     if (max_anti_diag <= (size_t) std::numeric_limits<int8_t>::max()) {
-        result = LowMem ? wavefront_align_low_mem_core<Local, int8_t>(seq1, seq2, reduced_scores, prune_diff,
-                                                                      match_score, match_func)
-                        : wavefront_align_core<Local, int8_t>(seq1, seq2, reduced_scores, prune_diff,
-                                                              match_score, match_func);
+        switch (Mem) {
+            case internal::StdMem:
+                result = wavefront_align_core<Local, int8_t>(seq1, seq2, reduced_scores, prune_diff,
+                                                             match_score, match_func);
+                break;
+                
+            case internal::LowMem:
+                result = wavefront_align_low_mem_core<Local, int8_t>(seq1, seq2, reduced_scores, prune_diff,
+                                                                     match_score, match_func);
+                break;
+                
+            case internal::Recursive:
+                result = wavefront_align_recursive_core<int8_t>(seq1, seq2, reduced_scores, prune_diff,
+                                                                match_func);
+                break;
+        }
     }
     else if (max_anti_diag <= (size_t) std::numeric_limits<int16_t>::max()) {
-        result = LowMem ? wavefront_align_low_mem_core<Local, int16_t>(seq1, seq2, reduced_scores, prune_diff,
-                                                                       match_score, match_func)
-                        : wavefront_align_core<Local, int16_t>(seq1, seq2, reduced_scores, prune_diff,
-                                                               match_score, match_func);
+        switch (Mem) {
+            case internal::StdMem:
+                result = wavefront_align_core<Local, int16_t>(seq1, seq2, reduced_scores, prune_diff,
+                                                              match_score, match_func);
+                break;
+                
+            case internal::LowMem:
+                result = wavefront_align_low_mem_core<Local, int16_t>(seq1, seq2, reduced_scores, prune_diff,
+                                                                      match_score, match_func);
+                break;
+                
+            case internal::Recursive:
+                result = wavefront_align_recursive_core<int16_t>(seq1, seq2, reduced_scores, prune_diff,
+                                                                 match_func);
+                break;
+        }
     }
     else {
-        result = LowMem ? wavefront_align_low_mem_core<Local, int32_t>(seq1, seq2, reduced_scores, prune_diff,
-                                                                       match_score, match_func)
-                        : wavefront_align_core<Local, int32_t>(seq1, seq2, reduced_scores, prune_diff,
-                                                               match_score, match_func);
+        switch (Mem) {
+            case internal::StdMem:
+                result = wavefront_align_core<Local, int32_t>(seq1, seq2, reduced_scores, prune_diff,
+                                                              match_score, match_func);
+                break;
+                
+            case internal::LowMem:
+                result = wavefront_align_low_mem_core<Local, int32_t>(seq1, seq2, reduced_scores, prune_diff,
+                                                                      match_score, match_func);
+                break;
+                
+            case internal::Recursive:
+                result = wavefront_align_recursive_core<int32_t>(seq1, seq2, reduced_scores, prune_diff,
+                                                                 match_func);
+                break;
+        }
     }
     // TODO: not doing int64_t for now -- we have bigger problems if we're aligning
     // gigabase sequences
@@ -1473,9 +1741,9 @@ struct StandardGlobalWFA {
     inline std::pair<std::vector<CIGAROp>, int32_t>
     operator()(const StringType& seq1, const StringType& seq2,
                const WFScores& scores, int32_t prune_diff, int32_t match_score) const {
-        return wavefront_dispatch<false, false, MatchFunc, StringType>(seq1, seq2,
-                                                                       scores, prune_diff,
-                                                                       match_score);
+        return wavefront_dispatch<false, internal::StdMem, MatchFunc, StringType>(seq1, seq2,
+                                                                                   scores, prune_diff,
+                                                                                   match_score);
     }
 };
 
@@ -1486,9 +1754,9 @@ struct StandardSemilocalWFA {
     inline std::pair<std::vector<CIGAROp>, int32_t>
     operator()(const StringType& seq1, const StringType& seq2,
                const WFScores& scores, int32_t prune_diff, int32_t match_score) const {
-        return wavefront_dispatch<true, false, MatchFunc, StringType>(seq1, seq2,
-                                                                      scores, prune_diff,
-                                                                      match_score);
+        return wavefront_dispatch<true, internal::StdMem, MatchFunc, StringType>(seq1, seq2,
+                                                                                  scores, prune_diff,
+                                                                                  match_score);
     }
 };
 
@@ -1499,9 +1767,9 @@ struct LowMemGlobalWFA {
     inline std::pair<std::vector<CIGAROp>, int32_t>
     operator()(const StringType& seq1, const StringType& seq2,
                const WFScores& scores, int32_t prune_diff, int32_t match_score) const {
-        return wavefront_dispatch<false, true, MatchFunc, StringType>(seq1, seq2,
-                                                                               scores, prune_diff,
-                                                                               match_score);
+        return wavefront_dispatch<false, internal::LowMem, MatchFunc, StringType>(seq1, seq2,
+                                                                                   scores, prune_diff,
+                                                                                   match_score);
     }
 };
 
@@ -1512,9 +1780,9 @@ struct LowMemSemilocalWFA {
     inline std::pair<std::vector<CIGAROp>, int32_t>
     operator()(const StringType& seq1, const StringType& seq2,
                const WFScores& scores, int32_t prune_diff, int32_t match_score) const {
-        return wavefront_dispatch<true, true, MatchFunc, StringType>(seq1, seq2,
-                                                                     scores, prune_diff,
-                                                                     match_score);
+        return wavefront_dispatch<true, internal::LowMem, MatchFunc, StringType>(seq1, seq2,
+                                                                                  scores, prune_diff,
+                                                                                  match_score);
     }
 };
 
@@ -1541,8 +1809,8 @@ std::pair<std::vector<CIGAROp>, int32_t>
 wavefront_align(const std::string& seq1, const std::string& seq2,
                 const WFScores& scores, int32_t prune_diff) {
     typedef internal::CompareMatchFunc<std::string> MFunc;
-    return internal::wavefront_dispatch<false, false, MFunc>(seq1, seq2,
-                                                             scores, prune_diff, 0);
+    return internal::wavefront_dispatch<false, internal::StdMem, MFunc>(seq1, seq2,
+                                                                         scores, prune_diff, 0);
 }
 
 
@@ -1551,10 +1819,21 @@ std::pair<std::vector<CIGAROp>, int32_t>
 wavefront_align_low_mem(const std::string& seq1, const std::string& seq2,
                         const WFScores& scores, int32_t prune_diff) {
     typedef internal::CompareMatchFunc<std::string> MFunc;
-    return internal::wavefront_dispatch<false, true, MFunc>(seq1, seq2,
-                                                            scores, prune_diff, 0);
+    return internal::wavefront_dispatch<false, internal::LowMem, MFunc>(seq1, seq2,
+                                                                         scores, prune_diff, 0);
 }
 
+
+inline
+std::pair<std::vector<CIGAROp>, int32_t>
+wavefront_align_recursive(const std::string& seq1, const std::string& seq2,
+                          const WFScores& scores, int32_t prune_diff) {
+    typedef internal::CompareMatchFunc<std::string> MFunc;
+    return internal::wavefront_dispatch<false, internal::Recursive, MFunc>(seq1, seq2,
+                                                                           scores, prune_diff, 0);
+}
+
+/// Same as above except with Smith-Waterman-Gotoh style scoring parameter
 
 inline
 std::pair<std::vector<CIGAROp>, int32_t>
@@ -1566,15 +1845,14 @@ wavefront_align(const std::string& seq1, const std::string& seq2,
     
     // do the alignment
     typedef internal::CompareMatchFunc<std::string> MFunc;
-    auto result = internal::wavefront_dispatch<false, false, MFunc>(seq1, seq2,
-                                                                    wf_scores, prune_diff, 0);
+    auto result = internal::wavefront_dispatch<false, internal::StdMem, MFunc>(seq1, seq2,
+                                                                                wf_scores, prune_diff, 0);
     
     // convert the score back to SWG params
     result.second = internal::convert_score(scores, seq1.size(), seq2.size(), result.second);
     return result;
 }
 
-/// Same as above except with Smith-Waterman-Gotoh style scoring parameter
 inline
 std::pair<std::vector<CIGAROp>, int32_t>
 wavefront_align_low_mem(const std::string& seq1, const std::string& seq2,
@@ -1585,8 +1863,27 @@ wavefront_align_low_mem(const std::string& seq1, const std::string& seq2,
     
     // do the alignment
     typedef internal::CompareMatchFunc<std::string> MFunc;
-    auto result = internal::wavefront_dispatch<false, true, MFunc>(seq1, seq2,
-                                                                   wf_scores, prune_diff, 0);
+    auto result = internal::wavefront_dispatch<false, internal::LowMem, MFunc>(seq1, seq2,
+                                                                                wf_scores, prune_diff, 0);
+    
+    // convert the score back to SWG params
+    result.second = internal::convert_score(scores, seq1.size(), seq2.size(), result.second);
+    return result;
+    
+}
+
+inline
+std::pair<std::vector<CIGAROp>, int32_t>
+wavefront_align_recursive(const std::string& seq1, const std::string& seq2,
+                          const SWGScores& scores, int32_t prune_diff) {
+    
+    // make WFA params
+    WFScores wf_scores = internal::convert_score_params(scores);
+    
+    // do the alignment
+    typedef internal::CompareMatchFunc<std::string> MFunc;
+    auto result = internal::wavefront_dispatch<false, internal::Recursive, MFunc>(seq1, seq2,
+                                                                                  wf_scores, prune_diff, 0);
     
     // convert the score back to SWG params
     result.second = internal::convert_score(scores, seq1.size(), seq2.size(), result.second);

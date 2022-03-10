@@ -91,10 +91,20 @@ int main(int argc, char** argv) {
     std::cout << "\to = " << gap_open << std::endl;
     std::cout << "\te = " << gap_extend << std::endl;
     std::cout << "\tp = " << prune << std::endl;
-    for (bool low_mem : {false, true}) {
+    for (int mem : {0, 1, 2}) {
         for (bool use_st : {false, true}) {
+            bool low_mem = (mem == 1);
+            bool recursive = (mem == 2);
             std::pair<std::vector<wfalm::CIGAROp>, int32_t> res;
-            if (low_mem && use_st) {
+            if (recursive && use_st) {
+                // not implemented yet
+                continue;
+            }
+            else if (recursive) {
+                std::cout << "recursive algorithm:" << std::endl;
+                res = wfalm::wavefront_align_recursive(seq1, seq2, scores, prune);
+            }
+            else if (low_mem && use_st) {
                 std::cout << "low memory algorithm with suffix tree match:" << std::endl;
                 res = wfalm::wavefront_align_low_mem_st(seq1, seq2, scores, prune);
             }
