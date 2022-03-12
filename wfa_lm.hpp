@@ -86,22 +86,22 @@ public:
      *  Alignment methods  *
      ***********************/
     
-//    // Globally align two sequences using the fastest algorithm that will remain
-//    // constrained
-//    //
-//    // Args:
-//    //   seq1         First sequence to be aligned (need not be null-terminated)
-//    //   len1         Length of first sequence to be aligned
-//    //   seq2         Second sequence to be aligned (need not be null-terminated)
-//    //   len2         Length of second sequence to be aligned
-//    //   target_mem   The target maximum memory use in bytes
-//    //
-//    // Return value:
-//    //   Pair consisting of CIGAR string for alignment and the alignment score.
-//    inline std::pair<std::vector<CIGAROp>, int32_t>
-//    wavefront_align_adaptive(const char* seq1, size_t len1,
-//                             const char* seq2, size_t len2,
-//                             size_t target_mem) const;
+    /// Globally align two sequences using the fastest algorithm that will remain
+    /// constrained to a given maximum memory.
+    ///
+    /// Args:
+    ///   seq1         First sequence to be aligned (need not be null-terminated)
+    ///   len1         Length of first sequence to be aligned
+    ///   seq2         Second sequence to be aligned (need not be null-terminated)
+    ///   len2         Length of second sequence to be aligned
+    ///   target_mem   The target maximum memory use in bytes
+    ///
+    /// Return value:
+    ///   Pair consisting of CIGAR string for alignment and the alignment score.
+    inline std::pair<std::vector<CIGAROp>, int32_t>
+    wavefront_align_adaptive(const char* seq1, size_t len1,
+                             const char* seq2, size_t len2,
+                             uint64_t max_mem) const;
     
     /// Globally align two sequences in O(s log s) memory using the recursive WFA algorithm.
     ///
@@ -260,6 +260,7 @@ protected:
     static const int StdMem = 0;
     static const int LowMem = 1;
     static const int Recursive = 2;
+    static const int AdaptiveMem = 3;
     
     /*
      * Adapter to avoid string copying for when aligning subintervals
@@ -401,6 +402,10 @@ protected:
             return len == 0;
         }
         
+        inline uint64_t bytes() {
+            return sizeof(IntType) * 3 * len;
+        }
+        
         IntType* alloced = nullptr;
         IntType* M = nullptr;
         IntType* I = nullptr;
@@ -462,7 +467,8 @@ protected:
         
         inline std::pair<std::vector<CIGAROp>, int32_t>
         operator()(const StringType& seq1, const StringType& seq2) const {
-            return aligner->wavefront_dispatch<false, WFAligner::StdMem, MatchFunc, StringType>(seq1, seq2);
+            return aligner->wavefront_dispatch<false, WFAligner::StdMem, MatchFunc, StringType>(seq1, seq2,
+                                                                                                std::numeric_limits<uint64_t>::max());
         }
         const WFAligner* aligner = nullptr;
     };
@@ -472,7 +478,8 @@ protected:
         
         inline std::pair<std::vector<CIGAROp>, int32_t>
         operator()(const StringType& seq1, const StringType& seq2) const {
-            return aligner->wavefront_dispatch<true, WFAligner::StdMem, MatchFunc, StringType>(seq1, seq2);
+            return aligner->wavefront_dispatch<true, WFAligner::StdMem, MatchFunc, StringType>(seq1, seq2,
+                                                                                               std::numeric_limits<uint64_t>::max());
         }
         const WFAligner* aligner = nullptr;
     };
@@ -482,7 +489,8 @@ protected:
         
         inline std::pair<std::vector<CIGAROp>, int32_t>
         operator()(const StringType& seq1, const StringType& seq2) const {
-            return aligner->wavefront_dispatch<false, WFAligner::LowMem, MatchFunc, StringType>(seq1, seq2);
+            return aligner->wavefront_dispatch<false, WFAligner::LowMem, MatchFunc, StringType>(seq1, seq2,
+                                                                                                std::numeric_limits<uint64_t>::max());
         }
         const WFAligner* aligner = nullptr;
     };
@@ -492,7 +500,8 @@ protected:
         
         inline std::pair<std::vector<CIGAROp>, int32_t>
         operator()(const StringType& seq1, const StringType& seq2) const {
-            return aligner->wavefront_dispatch<true, WFAligner::LowMem, MatchFunc, StringType>(seq1, seq2);
+            return aligner->wavefront_dispatch<true, WFAligner::LowMem, MatchFunc, StringType>(seq1, seq2,
+                                                                                               std::numeric_limits<uint64_t>::max());
         }
         const WFAligner* aligner = nullptr;
     };
@@ -502,7 +511,8 @@ protected:
         
         inline std::pair<std::vector<CIGAROp>, int32_t>
         operator()(const StringType& seq1, const StringType& seq2) const {
-            return aligner->wavefront_dispatch<false, WFAligner::Recursive, MatchFunc, StringType>(seq1, seq2);
+            return aligner->wavefront_dispatch<false, WFAligner::Recursive, MatchFunc, StringType>(seq1, seq2,
+                                                                                                   std::numeric_limits<uint64_t>::max());
         }
         const WFAligner* aligner = nullptr;
     };
@@ -512,7 +522,8 @@ protected:
         
         inline std::pair<std::vector<CIGAROp>, int32_t>
         operator()(const StringType& seq1, const StringType& seq2) const {
-            return aligner->wavefront_dispatch<true, WFAligner::Recursive, MatchFunc, StringType>(seq1, seq2);
+            return aligner->wavefront_dispatch<true, WFAligner::Recursive, MatchFunc, StringType>(seq1, seq2,
+                                                                                                  std::numeric_limits<uint64_t>::max());
         }
         const WFAligner* aligner = nullptr;
     };
@@ -525,32 +536,36 @@ protected:
     friend class RecursiveGlobalWFA<CompareMatchFunc<StringView>, StringView>;
     friend class RecursiveSemilocalWFA<CompareMatchFunc<RevStringView>, RevStringView>;
     
-    /*
-     * the central routine that is configured by all of the user-facing functions using templates
-     */
+    // central routine that back-ends the user-facing interface
     template<bool Local, int Mem, typename MatchFunc, typename StringType>
     inline std::pair<std::vector<CIGAROp>, int32_t>
-    wavefront_dispatch(const StringType& seq1, const StringType& seq2) const;
+    wavefront_dispatch(const StringType& seq1, const StringType& seq2, uint64_t max_mem) const;
     
+    // greedy take matches in WFA
     template<typename StringType, typename MatchFunc, typename IntType>
     inline void wavefront_extend(const StringType& seq1, const StringType& seq2,
                                  Wavefront<IntType>& wf, const MatchFunc& match_func) const;
     
+    // increase score and initialize row in WFA
     template<typename IntType, typename WFVector, typename StringType>
     inline Wavefront<IntType> wavefront_next(const StringType& seq1, const StringType& seq2,
                                              const WFVector& wfs) const;
     
+    // prune lagging diagonals in WFA
     template<bool Local, typename IntType>
     inline void wavefront_prune(Wavefront<IntType>& wf) const;
     
+    // check if reached complete alignment
     template<typename IntType>
     inline bool wavefront_reached(const Wavefront<IntType>& wf, int32_t diag, int32_t anti_diag) const;
     
+    // traceback through a complete DP structure
     template <typename StringType, typename IntType>
     inline std::vector<CIGAROp> wavefront_traceback(const StringType& seq1, const StringType& seq2,
                                                     const std::vector<Wavefront<IntType>>& wfs,
                                                     int64_t s, int64_t d) const;
     
+    // traceback as far as possible through a possibly incomplete DP structure
     // creates the CIGAR in reverse order,
     // appends new CIGAR operations to the CIGAR string that is passed in
     template<typename WFVector, typename StringType>
@@ -558,26 +573,53 @@ protected:
                                       const WFVector& wfs, int64_t& d, int64_t& lead_matches,
                                       WFMatrix_t& mat, int64_t& s, std::vector<CIGAROp>& cigar) const;
     
+    // traceback through the low memory algorithms DP structure, with recomputation
     template <bool Local, typename StringType, typename MatchFunc, typename IntType>
     std::vector<CIGAROp> wavefront_traceback_low_mem(const StringType& seq1, const StringType& seq2,
                                                      std::vector<std::pair<int32_t, Wavefront<IntType>>>& wf_bank,
                                                      int64_t s, int64_t d, const MatchFunc& match_func) const;
     
-    template<bool Local, typename IntType, typename StringType, typename MatchFunc>
+    // do classic WFA
+    template<bool Local, bool Adaptive, typename IntType, typename StringType, typename MatchFunc>
     std::pair<std::vector<CIGAROp>, int32_t>
     wavefront_align_core(const StringType& seq1, const StringType& seq2,
-                         const MatchFunc& match_func) const;
+                         const MatchFunc& match_func, uint64_t max_mem) const;
     
+    // do low memory WFA
     template<bool Local, typename IntType, typename StringType, typename MatchFunc>
     std::pair<std::vector<CIGAROp>, int32_t>
     wavefront_align_low_mem_core(const StringType& seq1, const StringType& seq2,
-                                 const MatchFunc& match_func) const;
+                                 const MatchFunc& match_func, uint64_t max_mim) const;
     
+    // internal routine for low memory WFA after initialization or fall-back
+    template<bool Local, bool Adaptive, typename IntType, typename StringType, typename MatchFunc>
+    inline std::pair<std::vector<CIGAROp>, int32_t>
+    wavefront_align_low_mem_core_internal(const StringType& seq1, const StringType& seq2,
+                                          const MatchFunc& match_func, uint64_t max_mem,
+                                          int64_t epoch_len, int64_t epoch_end, int64_t sample_rate,
+                                          int64_t opt, int64_t opt_diag, int64_t opt_s, size_t max_s,
+                                          std::deque<Wavefront<IntType>>& wf_buffer, size_t s,
+                                          std::vector<std::pair<int32_t, Wavefront<IntType>>>& wf_bank,
+                                          uint64_t curr_mem_buffer, uint64_t curr_mem_bank,
+                                          uint64_t curr_mem_block, uint64_t max_mem_block) const;
+    
+    // do recursive WFA
     template<bool Local, typename IntType, typename StringType, typename MatchFunc>
     std::pair<std::vector<CIGAROp>, int32_t>
     wavefront_align_recursive_core(const StringType& seq1, const StringType& seq2,
                                    const MatchFunc& match_func) const;
     
+    // internal routine for recursive WFA after initialization or fall-back
+    template<bool Local, typename IntType, typename StringType, typename MatchFunc>
+    inline std::pair<std::vector<CIGAROp>, int32_t>
+    wavefront_align_recursive_core_internal(const StringType& seq1, const StringType& seq2,
+                                            const MatchFunc& match_func,
+                                            int64_t opt, int64_t opt_diag, int64_t opt_s, size_t max_s,
+                                            std::vector<Wavefront<IntType>>& opt_stripe,
+                                            std::vector<Wavefront<IntType>>& first_stripe,
+                                            std::deque<Wavefront<IntType>>& wf_buffer, size_t s) const;
+    
+    // recursive calls of recursive WFA
     template<bool Local, typename IntType, typename StringType, typename MatchFunc, typename WFVector1, typename WFVector2>
     void wavefront_align_recursive_internal(const StringType& seq1, const StringType& seq2,
                                             int64_t lower_stripe_num, WFVector1& lower_stripe,
@@ -587,11 +629,30 @@ protected:
                                             std::vector<CIGAROp>& cigar,
                                             const MatchFunc& match_func) const;
     
+    // give up on a standard WFA and switch to doing low memory WFA
+    template<bool Local, typename IntType, typename StringType, typename MatchFunc>
+    std::pair<std::vector<CIGAROp>, int32_t>
+    fall_back_to_low_mem(const StringType& seq1, const StringType& seq2,
+                         const MatchFunc& match_func, uint64_t max_mem,
+                         int64_t opt, int64_t opt_diag, int64_t opt_s, size_t max_s,
+                         std::vector<Wavefront<IntType>>& wfs) const;
+    
+    // give up on low memory WFA and switch to doing recursive WFA
+    template<bool Local, typename IntType, typename StringType, typename MatchFunc>
+    std::pair<std::vector<CIGAROp>, int32_t>
+    fall_back_to_recursive(const StringType& seq1, const StringType& seq2,
+                           const MatchFunc& match_func,
+                           int64_t opt, int64_t opt_diag, int64_t opt_s, size_t max_s,
+                           std::deque<Wavefront<IntType>>& wf_buffer, size_t s,
+                           std::vector<std::pair<int32_t, Wavefront<IntType>>>& wf_bank) const;
+    
+    // check score that are SWG-locally optimal
     template<typename StringType, typename IntType>
     inline void find_local_opt(const StringType& seq1, const StringType& seq2,
                                int64_t s, const Wavefront<IntType>& wf,
                                int64_t& opt, int64_t& opt_diag, int64_t& opt_s, size_t& max_s) const;
     
+    // do anchored local alignment
     template<typename PrefSemilocalWFA, typename AnchorGlobalWFA, typename SuffSemilocalWFA>
     std::tuple<std::vector<CIGAROp>, int32_t, std::pair<size_t, size_t>, std::pair<size_t, size_t>>
     wavefront_align_local_core(const char* seq1, size_t len1,
@@ -600,12 +661,16 @@ protected:
                                size_t anchor_begin_2, size_t anchor_end_2,
                                bool anchor_is_match) const;
     
+    // greatest commmon denominator
     uint32_t gcd(uint32_t a, uint32_t b) const;
     
+    // convert a WFA score into a SWG score
     inline int32_t convert_score(size_t len1, size_t len2, int32_t score) const;
     
+    // merge adjacent CIGAR ops that are the same type
     inline void coalesce_cigar(std::vector<CIGAROp>& cigar) const;
     
+    // get the length of the aligned sequence on both sequences
     inline std::pair<size_t, size_t> cigar_base_length(const std::vector<CIGAROp>& cigar) const;
     
     // WFA-style parameters
@@ -680,7 +745,8 @@ WFAligner::wavefront_align(const char* seq1, size_t len1,
                            const char* seq2, size_t len2) const {
     StringView str1(seq1, 0, len1);
     StringView str2(seq2, 0, len2);
-    return wavefront_dispatch<false, StdMem, CompareMatchFunc<StringView>>(str1, str2);
+    return wavefront_dispatch<false, StdMem, CompareMatchFunc<StringView>>(str1, str2,
+                                                                           std::numeric_limits<uint64_t>::max());
 }
 
 
@@ -689,7 +755,8 @@ WFAligner::wavefront_align_low_mem(const char* seq1, size_t len1,
                                    const char* seq2, size_t len2) const {
     StringView str1(seq1, 0, len1);
     StringView str2(seq2, 0, len2);
-    return wavefront_dispatch<false, LowMem, CompareMatchFunc<StringView>>(str1, str2);
+    return wavefront_dispatch<false, LowMem, CompareMatchFunc<StringView>>(str1, str2,
+                                                                           std::numeric_limits<uint64_t>::max());
 }
 
 
@@ -698,7 +765,17 @@ WFAligner::wavefront_align_recursive(const char* seq1, size_t len1,
                                      const char* seq2, size_t len2) const {
     StringView str1(seq1, 0, len1);
     StringView str2(seq2, 0, len2);
-    return wavefront_dispatch<false, Recursive, CompareMatchFunc<StringView>>(str1, str2);
+    return wavefront_dispatch<false, Recursive, CompareMatchFunc<StringView>>(str1, str2,
+                                                                              std::numeric_limits<uint64_t>::max());
+}
+
+inline std::pair<std::vector<CIGAROp>, int32_t>
+WFAligner::wavefront_align_adaptive(const char* seq1, size_t len1,
+                                    const char* seq2, size_t len2,
+                                    uint64_t max_mem) const {
+    StringView str1(seq1, 0, len1);
+    StringView str2(seq2, 0, len2);
+    return wavefront_dispatch<false, AdaptiveMem, CompareMatchFunc<StringView>>(str1, str2, max_mem);
 }
 
 inline std::tuple<std::vector<CIGAROp>, int32_t, std::pair<size_t, size_t>, std::pair<size_t, size_t>>
@@ -757,7 +834,13 @@ WFAligner::wavefront_align_local_recursive(const char* seq1, size_t len1,
 
 template<bool Local, int Mem, typename MatchFunc, typename StringType>
 inline std::pair<std::vector<CIGAROp>, int32_t>
-WFAligner::wavefront_dispatch(const StringType& seq1, const StringType& seq2) const {
+WFAligner::wavefront_dispatch(const StringType& seq1, const StringType& seq2, uint64_t max_mem) const {
+    
+    if (seq1.size() + seq2.size() > std::numeric_limits<int32_t>::max()) {
+        std::stringstream strm;
+        strm << "error:[WFAligner] WFA implementation can only align sequences of combined length < "  << std::numeric_limits<int32_t>::max() << '\n';
+        throw std::runtime_error(strm.str());
+    }
     
     // make a match function as directed by the calling environment
     MatchFunc match_func(seq1, seq2);
@@ -768,12 +851,16 @@ WFAligner::wavefront_dispatch(const StringType& seq1, const StringType& seq2) co
     size_t max_anti_diag = seq1.size() + seq2.size();
     if (max_anti_diag <= (size_t) std::numeric_limits<int8_t>::max()) {
         switch (Mem) {
+            case AdaptiveMem:
+                result = wavefront_align_core<Local, true, int8_t>(seq1, seq2, match_func, max_mem);
+                break;
+                
             case StdMem:
-                result = wavefront_align_core<Local, int8_t>(seq1, seq2, match_func);
+                result = wavefront_align_core<Local, false, int8_t>(seq1, seq2, match_func, max_mem);
                 break;
                 
             case LowMem:
-                result = wavefront_align_low_mem_core<Local, int8_t>(seq1, seq2, match_func);
+                result = wavefront_align_low_mem_core<Local, int8_t>(seq1, seq2, match_func, max_mem);
                 break;
                 
             case Recursive:
@@ -783,12 +870,16 @@ WFAligner::wavefront_dispatch(const StringType& seq1, const StringType& seq2) co
     }
     else if (max_anti_diag <= (size_t) std::numeric_limits<int16_t>::max()) {
         switch (Mem) {
+            case AdaptiveMem:
+                result = wavefront_align_core<Local, true, int16_t>(seq1, seq2, match_func, max_mem);
+                break;
+                
             case StdMem:
-                result = wavefront_align_core<Local, int16_t>(seq1, seq2, match_func);
+                result = wavefront_align_core<Local, false, int16_t>(seq1, seq2, match_func, max_mem);
                 break;
                 
             case LowMem:
-                result = wavefront_align_low_mem_core<Local, int16_t>(seq1, seq2, match_func);
+                result = wavefront_align_low_mem_core<Local, int16_t>(seq1, seq2, match_func, max_mem);
                 break;
                 
             case Recursive:
@@ -798,12 +889,16 @@ WFAligner::wavefront_dispatch(const StringType& seq1, const StringType& seq2) co
     }
     else {
         switch (Mem) {
+            case AdaptiveMem:
+                result = wavefront_align_core<Local, true, int32_t>(seq1, seq2, match_func, max_mem);
+                break;
+                
             case StdMem:
-                result = wavefront_align_core<Local, int32_t>(seq1, seq2, match_func);
+                result = wavefront_align_core<Local, false, int32_t>(seq1, seq2, match_func, max_mem);
                 break;
                 
             case LowMem:
-                result = wavefront_align_low_mem_core<Local, int32_t>(seq1, seq2, match_func);
+                result = wavefront_align_low_mem_core<Local, int32_t>(seq1, seq2, match_func, max_mem);
                 break;
                 
             case Recursive:
@@ -826,10 +921,13 @@ WFAligner::wavefront_dispatch(const StringType& seq1, const StringType& seq2) co
     return result;
 }
 
-template<bool Local, typename IntType, typename StringType, typename MatchFunc>
+template<bool Local, bool Adaptive, typename IntType, typename StringType, typename MatchFunc>
 std::pair<std::vector<CIGAROp>, int32_t>
 WFAligner::wavefront_align_core(const StringType& seq1, const StringType& seq2,
-                                const MatchFunc& match_func) const {
+                                const MatchFunc& match_func, uint64_t max_mem) const {
+
+    // the return value
+    std::pair<std::vector<CIGAROp>, int32_t> res;
     
     int32_t final_diag = seq1.size() - seq2.size();
     int32_t final_anti_diag = seq1.size() + seq2.size();
@@ -839,7 +937,9 @@ WFAligner::wavefront_align_core(const StringType& seq1, const StringType& seq2,
     int64_t opt_diag = 0;
     int64_t opt_s = 0;
     size_t max_s = std::numeric_limits<size_t>::max();
-    size_t s = 0;
+    
+    uint64_t curr_mem = 0;
+    bool hit_max_mem = false;
     
     // init wavefront to the upper left of both sequences' starts
     std::vector<Wavefront<IntType>> wfs;
@@ -849,62 +949,145 @@ WFAligner::wavefront_align_core(const StringType& seq1, const StringType& seq2,
     // do wavefront iterations until hit max score or alignment finishes
     wavefront_extend(seq1, seq2, wfs.front(), match_func);
     if (Local) {
-        find_local_opt(seq1, seq2, s, wfs.front(),
+        find_local_opt(seq1, seq2, 0, wfs.front(),
                        opt, opt_diag, opt_s, max_s);
     }
+    if (Adaptive) {
+        curr_mem += wfs.front().bytes();
+    }
     while (!wavefront_reached(wfs.back(), final_diag, final_anti_diag) &&
-           s <= max_s) {
+           wfs.size() - 1 <= max_s) {
+        if (Adaptive && curr_mem > max_mem) {
+            hit_max_mem = true;
+            break;
+        }
         
-        ++s;
         wfs.emplace_back(wavefront_next<IntType>(seq1, seq2, wfs));
         
         wavefront_extend(seq1, seq2, wfs.back(), match_func);
         if (Local) {
-            find_local_opt(seq1, seq2, s, wfs.back(),
+            find_local_opt(seq1, seq2, wfs.size() - 1, wfs.back(),
                            opt, opt_diag, opt_s, max_s);
         }
         // prune lagging diagonals
         wavefront_prune<Local>(wfs.back());
         
+        if (Adaptive) {
+            curr_mem += wfs.back().bytes();
+        }
     }
     
 #ifdef debug_viz
     wavefront_viz(seq1, seq2, wfs, scores);
 #endif
     
-    int64_t traceback_s, traceback_d;
-    if (Local) {
-        traceback_d = opt_diag;
-        traceback_s = opt_s;
+    if (Adaptive && hit_max_mem) {
+        // we hit the memory maximum without completing, fall back to the low memory algorithm
+        res = fall_back_to_low_mem<Local, IntType>(seq1, seq2, match_func, max_mem,
+                                                   opt, opt_diag, opt_s, max_s, wfs);
     }
     else {
-        traceback_d = seq1.size() - seq2.size();
-        traceback_s = wfs.size() - 1;
+        // we completed the algorithm
+        int64_t traceback_s, traceback_d;
+        if (Local) {
+            traceback_d = opt_diag;
+            traceback_s = opt_s;
+        }
+        else {
+            traceback_d = seq1.size() - seq2.size();
+            traceback_s = wfs.size() - 1;
+        }
+        res.second = traceback_s;
+        res.first = wavefront_traceback(seq1, seq2, wfs, traceback_s, traceback_d);
     }
     
-    return std::make_pair(wavefront_traceback(seq1, seq2, wfs, traceback_s, traceback_d),
-                          int32_t(traceback_s));
+    return res;
 }
-
 
 template<bool Local, typename IntType, typename StringType, typename MatchFunc>
 std::pair<std::vector<CIGAROp>, int32_t>
-WFAligner::wavefront_align_low_mem_core(const StringType& seq1, const StringType& seq2,
-                                        const MatchFunc& match_func) const {
+WFAligner::fall_back_to_low_mem(const StringType& seq1, const StringType& seq2,
+                                const MatchFunc& match_func, uint64_t max_mem,
+                                int64_t opt, int64_t opt_diag, int64_t opt_s, size_t max_s,
+                                std::vector<WFAligner::Wavefront<IntType>>& wfs) const {
     
-    if (seq1.size() + seq2.size() > std::numeric_limits<int32_t>::max()) {
-        std::stringstream strm;
-        strm << "error: WFA implementation can only align sequences of combined length < "  << std::numeric_limits<int32_t>::max() << '\n';
-        throw std::runtime_error(strm.str());
-    }
+    std::deque<Wavefront<IntType>> wf_buffer;
+    std::vector<std::pair<int32_t, Wavefront<IntType>>> wf_bank;
     
+    // subsampling params
     int64_t epoch_len = 1;
     int64_t epoch_end = 1;
     int64_t sample_rate = 1;
     
-    // use these to know when we've finished the alignment
-    int32_t final_diag = seq1.size() - seq2.size();
-    int32_t final_anti_diag = seq1.size() + seq2.size();
+    uint64_t curr_mem_bank = 0;
+    uint64_t curr_mem_block = 0;
+    uint64_t max_mem_block = 0;
+    uint64_t curr_mem_buffer = 0;
+    
+    size_t s = wfs.size() - 1;
+    if (wfs.size() < 2 * stripe_width) {
+        // we wouldn't have started evicting yet, everything should end up in the buffer
+        for (auto& wf : wfs) {
+            curr_mem_buffer += wf.bytes();
+            wf_buffer.emplace_back(std::move(wf));
+        }
+    }
+    else {
+        // grab the stripe(s) that would have been found in the buffer
+        size_t buffer_stripe_num = (wfs.size() + 1) / stripe_width - 1;
+        for (size_t i = buffer_stripe_num * stripe_width; i < wfs.size(); ++i) {
+            wf_buffer.emplace_back(std::move(wfs[i]));
+        }
+        
+        // sub-sample the stripes according the the epoch schedule
+        // TODO: kind of a lot of copy-pasta code here...
+        for (int64_t stripe_num = 0; stripe_num < buffer_stripe_num; ++stripe_num) {
+            
+            // is this the first wavefront of a new epoch?
+            if (stripe_num == epoch_end) {
+                // we're entering a new epoch, adust the sub-sampling parameters
+                // accordingly
+                epoch_len *= 4;
+                epoch_end += epoch_len;
+                sample_rate *= 2;
+            }
+            
+            // bit-hacky sub for % that works because sample_rate is a power of 2
+            bool keep = !stripe_num || (stripe_num & (sample_rate - 1));
+            for (size_t i = 0, k = stripe_num * stripe_width; i < stripe_width; ++i) {
+                if (keep) {
+                    // we're ejecting a stripe that's being retained,
+                    wf_bank.emplace_back(k + i, std::move(wfs[k + i]));
+                    curr_mem_bank += wf_bank.back().second.bytes();
+                    curr_mem_block = 0;
+                }
+                else {
+                    curr_mem_block += wfs[k + i].bytes();
+                    max_mem_block = std::max(max_mem_block, curr_mem_block);
+                }
+            }
+        }
+    }
+    
+    // clear the memory that we're no longer using
+    wfs = std::vector<Wavefront<IntType>>();
+    
+    return wavefront_align_low_mem_core_internal<Local, true, IntType>(seq1, seq2, match_func, max_mem,
+                                                                       epoch_len, epoch_end, sample_rate,
+                                                                       opt, opt_diag, opt_s, max_s,
+                                                                       wf_buffer, s, wf_bank,
+                                                                       curr_mem_buffer, curr_mem_bank, curr_mem_block, max_mem_block);
+}
+
+template<bool Local, typename IntType, typename StringType, typename MatchFunc>
+std::pair<std::vector<CIGAROp>, int32_t>
+WFAligner::wavefront_align_low_mem_core(const StringType& seq1, const StringType& seq2,
+                                        const MatchFunc& match_func, uint64_t max_mem) const {
+
+    // subsampling params
+    int64_t epoch_len = 1;
+    int64_t epoch_end = 1;
+    int64_t sample_rate = 1;
     
     // trackers used for local alignment
     int64_t opt = 0;
@@ -918,30 +1101,69 @@ WFAligner::wavefront_align_low_mem_core(const StringType& seq1, const StringType
     wf_buffer.front().M[0] = 0;
     size_t s = 0;
     
-    // the wavefronts we've decided to keep after they leave the buffer
-    std::vector<std::pair<int32_t, Wavefront<IntType>>> wf_bank;
-    
-    // do wavefront iterations until hit max score or alignment finishes
+    // make sure the first wavefront is extended
     wavefront_extend(seq1, seq2, wf_buffer.front(), match_func);
     if (Local) {
         find_local_opt(seq1, seq2, s, wf_buffer.front(),
                        opt, opt_diag, opt_s, max_s);
     }
+    
+    // the wavefronts we've decided to keep after they leave the buffer
+    std::vector<std::pair<int32_t, Wavefront<IntType>>> wf_bank;
+    
+    uint64_t curr_mem = wf_buffer.front().bytes();
+    
+    // TODO: i'm not sure if all of the tracking variables will be able to get optimized out
+    // since it will be hard to identify them as constant. compiler might not respect inlining
+    // of internal method
+    return wavefront_align_low_mem_core_internal<Local, false, IntType>(seq1, seq2, match_func, max_mem,
+                                                                        epoch_len, epoch_end, sample_rate,
+                                                                        opt, opt_diag, opt_s, max_s,
+                                                                        wf_buffer, s, wf_bank, curr_mem, 0, 0, 0);
+};
+
+template<bool Local, bool Adaptive, typename IntType, typename StringType, typename MatchFunc>
+inline std::pair<std::vector<CIGAROp>, int32_t>
+WFAligner::wavefront_align_low_mem_core_internal(const StringType& seq1, const StringType& seq2,
+                                                 const MatchFunc& match_func, uint64_t max_mem,
+                                                 int64_t epoch_len, int64_t epoch_end, int64_t sample_rate,
+                                                 int64_t opt, int64_t opt_diag, int64_t opt_s, size_t max_s,
+                                                 std::deque<WFAligner::Wavefront<IntType>>& wf_buffer, size_t s,
+                                                 std::vector<std::pair<int32_t, WFAligner::Wavefront<IntType>>>& wf_bank,
+                                                 uint64_t curr_mem_buffer, uint64_t curr_mem_bank,
+                                                 uint64_t curr_mem_block, uint64_t max_mem_block) const {
+
+    // the return value
+    std::pair<std::vector<CIGAROp>, int32_t> res;
+    
+    // use these to know when we've finished the alignment
+    int32_t final_diag = seq1.size() - seq2.size();
+    int32_t final_anti_diag = seq1.size() + seq2.size();
+    
+    // FIXME: i also need an estimate of the recomputed block...
+    bool hit_max_mem = false;
+    
+    // do wavefront iterations until hit max score or alignment finishes
     while (!wavefront_reached(wf_buffer.back(), final_diag, final_anti_diag) &&
            s <= max_s) {
         
         // increase score and get the next wavefront
         ++s;
-        auto wf_next = wavefront_next<IntType>(seq1, seq2, wf_buffer);
+        wf_buffer.emplace_back(wavefront_next<IntType>(seq1, seq2, wf_buffer));
+        if (Adaptive) {
+            curr_mem_buffer += wf_buffer.back().bytes();
+        }
         
-        if (wf_buffer.size() >= stripe_width) {
-            // we need to evict a wavefront from the buffer to continue
+        // note: the method of keeping up to 2 stripes in memory at a time is a bit strange
+        // here, but it greatly simplifies the fall back to the recursive alignment
+        if (wf_buffer.size() == 2 * stripe_width) {
+            // we need to evict a stripe from the buffer to continue
             
             // the stripe of the wavefront that is falling out of the buffer
-            int32_t stripe_num = (s - stripe_width) / stripe_width;
+            int32_t stripe_num = s / stripe_width - 1; // formula works because s must be k*w-1
             
             // is this the first wavefront of a new epoch?
-            if (stripe_num == epoch_end && stripe_num * stripe_width == s - stripe_width) {
+            if (stripe_num == epoch_end) {
                 // we're entering a new epoch, adust the sub-sampling parameters
                 // accordingly
                 epoch_len *= 4;
@@ -950,14 +1172,26 @@ WFAligner::wavefront_align_low_mem_core(const StringType& seq1, const StringType
             }
             
             // bit-hacky sub for % that works because sample_rate is a power of 2
-            if ((stripe_num & (sample_rate - 1)) == 0) {
-                // we're ejecting a stripe that's being retained,
-                wf_bank.emplace_back(s - stripe_width, std::move(wf_buffer.front()));
+            bool keep = !stripe_num || (stripe_num & (sample_rate - 1));
+            for (size_t i = 0; i < stripe_width; ++i) {
+                if (keep) {
+                    // we're ejecting a stripe that's being retained,
+                    wf_bank.emplace_back(stripe_num * stripe_width + i, std::move(wf_buffer.front()));
+                    if (Adaptive) {
+                        curr_mem_block = 0;
+                        curr_mem_bank += wf_buffer.front().bytes();
+                    }
+                }
+                else if (Adaptive) {
+                    // record that we're freeing memory
+                    auto b = wf_buffer.front().bytes();
+                    curr_mem_buffer -= b;
+                    curr_mem_block += b;
+                    max_mem_block = std::max(curr_mem_block, max_mem_block);
+                }
+                wf_buffer.pop_front();
             }
-            
-            wf_buffer.pop_front();
         }
-        wf_buffer.emplace_back(std::move(wf_next));
         
         // follow matches
         wavefront_extend(seq1, seq2, wf_buffer.back(), match_func);
@@ -968,28 +1202,109 @@ WFAligner::wavefront_align_low_mem_core(const StringType& seq1, const StringType
         }
         // prune lagging diagonals
         wavefront_prune<Local>(wf_buffer.back());
+        
+        if (Adaptive) {
+            curr_mem_bank += wf_buffer.back().bytes();
+            if (curr_mem_bank + max_mem_block + curr_mem_buffer >= max_mem) {
+                hit_max_mem = true;
+                break;
+            }
+        }
     }
     
-    // move the final wavefronts from the buffer to the bank
-    for (size_t i = 0; i < wf_buffer.size(); ++i) {
-        wf_bank.emplace_back(s - wf_buffer.size() + i + 1, std::move(wf_buffer[i]));
-    }
-    
-    int64_t traceback_s, traceback_d;
-    if (Local) {
-        traceback_d = opt_diag;
-        traceback_s = opt_s;
-        s = opt_s;
+    if (Adaptive && hit_max_mem) {
+        // we hit the maximum memory without completing, fall back to the recursive algorithm
+        res = fall_back_to_recursive<Local, IntType>(seq1, seq2, match_func,
+                                                     opt, opt_diag, opt_s, max_s,
+                                                     wf_buffer, s, wf_bank);
     }
     else {
-        traceback_d = seq1.size() - seq2.size();
-        traceback_s = s;
+        // we completed successfully
+        
+        // move the final wavefronts from the buffer to the bank
+        for (size_t i = 0; i < wf_buffer.size(); ++i) {
+            wf_bank.emplace_back(s - wf_buffer.size() + i + 1, std::move(wf_buffer[i]));
+        }
+        
+        int64_t traceback_s, traceback_d;
+        if (Local) {
+            traceback_d = opt_diag;
+            traceback_s = opt_s;
+            s = opt_s;
+        }
+        else {
+            traceback_d = seq1.size() - seq2.size();
+            traceback_s = s;
+        }
+        
+        res.first = wavefront_traceback_low_mem<Local>(seq1, seq2, wf_bank, traceback_s, traceback_d, match_func);
+        res.second = s;
     }
     
+    return res;
+}
+
+template<bool Local, typename IntType, typename StringType, typename MatchFunc>
+std::pair<std::vector<CIGAROp>, int32_t>
+WFAligner::fall_back_to_recursive(const StringType& seq1, const StringType& seq2,
+                                  const MatchFunc& match_func,
+                                  int64_t opt, int64_t opt_diag, int64_t opt_s, size_t max_s,
+                                  std::deque<WFAligner::Wavefront<IntType>>& wf_buffer, size_t s,
+                                  std::vector<std::pair<int32_t, WFAligner::Wavefront<IntType>>>& wf_bank) const {
     
-    return std::make_pair(wavefront_traceback_low_mem<Local>(seq1, seq2, wf_bank,
-                                                             traceback_s, traceback_d,
-                                                             match_func), s);
+    // convert the low memory data structures into the recursive data structures
+    
+    std::vector<Wavefront<IntType>> opt_stripe;
+    std::vector<Wavefront<IntType>> first_stripe;
+    
+    if (!wf_bank.empty()) {
+        // we ejected a stripe from the buffer, which we guarantee must include
+        // the first stripe, so now we remember it
+        first_stripe.reserve(stripe_width);
+        for (size_t i = 0; i < stripe_width; ++i) {
+            first_stripe.emplace_back(std::move(wf_bank[i].second));
+        }
+        
+        if (Local) {
+            
+            int64_t opt_stripe_num = (opt_s + stripe_width - 1) / stripe_width;
+            if (opt_stripe_num != 0 && opt_stripe_num < (s - wf_buffer.size()) / stripe_width + 1) {
+                // the opt isn't in the first stripe or the buffer, so we need to either find or recompute it
+                
+                size_t i = 0;
+                while (wf_bank[i].first / stripe_width < opt_stripe_num) {
+                    i += stripe_width;
+                }
+                
+                if (wf_bank[i].first / stripe_width != opt_stripe_num) {
+                    // we didn't sub-sample the stripe with the opt, so we have recompute it
+                    
+                    // eliminate the portion after the opt, which we don't need
+                    wf_bank.resize(i);
+                    // and add another stripe to the bank
+                    WFBankAdapter<IntType> adapter(wf_bank);
+                    for (size_t j = 0; j < stripe_width; ++j) {
+                        wf_bank.emplace_back(wf_bank.back().first + 1,
+                                             wavefront_next<IntType>(seq1, seq2, adapter));
+                        wavefront_extend(seq1, seq2, wf_bank.back().second, match_func);
+                        wavefront_prune<Local>(wf_bank.back().second);
+                    }
+                }
+                
+                // retrieve the opt's stripe from the bank
+                opt_stripe.reserve(stripe_width);
+                for (size_t n = i + stripe_width; i < n; ++i) {
+                    opt_stripe.emplace_back(std::move(wf_bank[i].second));
+                }
+            }
+        }
+    }
+    
+    // discard the wavefronts we're no longer retaining
+    wf_bank = std::vector<std::pair<int32_t, Wavefront<IntType>>>();
+    
+    return wavefront_align_recursive_core_internal<Local, IntType>(seq1, seq2, match_func, opt, opt_diag, opt_s, max_s,
+                                                                   opt_stripe, first_stripe, wf_buffer, s);
 }
 
 template<bool Local, typename IntType, typename StringType, typename MatchFunc>
@@ -997,16 +1312,6 @@ std::pair<std::vector<CIGAROp>, int32_t>
 WFAligner::wavefront_align_recursive_core(const StringType& seq1, const StringType& seq2,
                                           const MatchFunc& match_func) const {
     
-    if (seq1.size() + seq2.size() > std::numeric_limits<int32_t>::max()) {
-        std::stringstream strm;
-        strm << "error: WFA implementation can only align sequences of combined length < "  << std::numeric_limits<int32_t>::max() << '\n';
-        throw std::runtime_error(strm.str());
-    }
-    
-    // use these to know when we've finished the alignment
-    int32_t final_diag = seq1.size() - seq2.size();
-    int32_t final_anti_diag = seq1.size() + seq2.size();
-
     // trackers used for local alignment
     int64_t opt = 0;
     int64_t opt_diag = 0;
@@ -1020,25 +1325,41 @@ WFAligner::wavefront_align_recursive_core(const StringType& seq1, const StringTy
     wf_buffer.front().M[0] = 0;
     size_t s = 0;
     
-    // we need to remember the first stripe for the recursive step
-    std::vector<Wavefront<IntType>> first_stripe;
-    
-    // do wavefront iterations until hit max score or alignment finishes
     wavefront_extend(seq1, seq2, wf_buffer.front(), match_func);
     if (Local) {
         find_local_opt(seq1, seq2, s, wf_buffer.front(),
                        opt, opt_diag, opt_s, max_s);
     }
+    
+    // we need to remember the first stripe for the recursive step
+    std::vector<Wavefront<IntType>> first_stripe;
+    
+    return wavefront_align_recursive_core_internal<Local, IntType>(seq1, seq2, match_func, opt, opt_diag, opt_s, max_s,
+                                                                   opt_stripe, first_stripe, wf_buffer, s);
+}
+
+template<bool Local, typename IntType, typename StringType, typename MatchFunc>
+inline std::pair<std::vector<CIGAROp>, int32_t>
+WFAligner::wavefront_align_recursive_core_internal(const StringType& seq1, const StringType& seq2,
+                                                   const MatchFunc& match_func,
+                                                   int64_t opt, int64_t opt_diag, int64_t opt_s, size_t max_s,
+                                                   std::vector<WFAligner::Wavefront<IntType>>& opt_stripe,
+                                                   std::vector<WFAligner::Wavefront<IntType>>& first_stripe,
+                                                   std::deque<WFAligner::Wavefront<IntType>>& wf_buffer, size_t s) const {
+    
+    // use these to know when we've finished the alignment
+    int32_t final_diag = seq1.size() - seq2.size();
+    int32_t final_anti_diag = seq1.size() + seq2.size();
+    
+    // do wavefront iterations until hit max score or alignment finishes
     while (!wavefront_reached(wf_buffer.back(), final_diag, final_anti_diag) &&
            s <= max_s) {
         // increase score and get the next wavefront
         ++s;
         wf_buffer.emplace_back(wavefront_next<IntType>(seq1, seq2, wf_buffer));
-        //std::cerr << "DP to score " << s << std::endl;
         
         if (wf_buffer.size() == 2 * stripe_width) {
             // we need to evict a stripe wavefront from the buffer to continue
-            //std::cerr << "evicting a stripe" << std::endl;
             for (int64_t i = 0; i < stripe_width; ++i) {
                 if (s + 1 == 2 * stripe_width) {
                     // we need to remember the first stripe when we evict it
@@ -1079,7 +1400,7 @@ WFAligner::wavefront_align_recursive_core(const StringType& seq1, const StringTy
         
         // TODO: i don't like repeating this formula 3x in different places...
         int64_t opt_stripe_num = (opt_s + stripe_width - 1) / stripe_width;
-        if (opt_stripe_num != 0 && opt_stripe_num != (s - wf_buffer.size() + stripe_width) / stripe_width) {
+        if (opt_stripe_num != 0 && opt_stripe_num != (s - wf_buffer.size()) / stripe_width + 1) {
             // the local optimum did not occur in the first or last stripe, so we replace the contents
             // of the last stripe with the opt's stripe, which we should have retained
             wf_buffer.clear();
@@ -1115,7 +1436,7 @@ WFAligner::wavefront_align_recursive_core(const StringType& seq1, const StringTy
     }
     else {
         // we enter the recursive portion of the algorithm
-        int64_t stripe_num = (traceback_s - wf_buffer.size() + stripe_width) / stripe_width; // s+1 and w-1 cancel out
+        int64_t stripe_num = (traceback_s - wf_buffer.size()) / stripe_width + 1;
         WFMatrix_t traceback_mat = MAT_M;
         int64_t lead_matches = 0;
         wavefront_align_recursive_internal<Local, IntType>(seq1, seq2,
@@ -1503,7 +1824,7 @@ std::vector<CIGAROp> WFAligner::wavefront_traceback_low_mem(const StringType& se
     WFMatrix_t mat = MAT_M;
     int64_t lead_matches = 0;
     // the index within the traceback block that traceback ends, initial value is arbitrary
-    int64_t relative_s = traceback_block.size() - 1;;
+    int64_t relative_s = traceback_block.size() - 1;
     
     // traceback as far as possible in this block
     wavefront_traceback_internal(seq1, seq2, traceback_block,

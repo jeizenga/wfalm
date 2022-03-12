@@ -59,8 +59,37 @@ public:
     /// Default constructor. Performs edit distance alignment.
     WFAlignerST();
     
-    /// Note: the lagging_diagonal_prune parameter from WFAligner can be set manually
-    /// to toggle pruning
+    /*****************************
+     *  Configurable parameters  *
+     *****************************/
+    
+    /// If set to a number >= 0, prunes diagonals that fall this many anti-diagonals
+    /// behind the furthest-reaching diagonal. This can lead to suboptimal alignments,
+    /// but it also can increase speed and reduce memory use. If set to a number < 0,
+    /// no pruning is performed.
+    using WFAligner::lagging_diagonal_prune;
+    
+    /***********************
+     *  Alignment methods  *
+     ***********************/
+    
+    /// Globally align two sequences using the fastest algorithm that will remain
+    /// constrained to a given maximum memory, using a suffix tree to compute matches
+    ///
+    /// Args:
+    ///   seq1         First sequence to be aligned (need not be null-terminated)
+    ///   len1         Length of first sequence to be aligned
+    ///   seq2         Second sequence to be aligned (need not be null-terminated)
+    ///   len2         Length of second sequence to be aligned
+    ///   target_mem   The target maximum memory use in bytes
+    ///
+    /// Return value:
+    ///   Pair consisting of CIGAR string for alignment and the alignment score.
+    inline std::pair<std::vector<CIGAROp>, int32_t>
+    wavefront_align_adaptive(const char* seq1, size_t len1,
+                             const char* seq2, size_t len2,
+                             uint64_t max_mem) const;
+    
     
     /// Globally align two sequences in O(s log s) memory using the recursive WFA algorithm,
     /// using a suffix tree to compute matches.
@@ -311,7 +340,6 @@ private:
         size_t offset;
     };
     
-    
     // give the wrapper access to the dispatch function
     friend class StandardGlobalWFA<STMatchFunc<StringView>, StringView>;
     friend class StandardSemilocalWFA<STMatchFunc<RevStringView>, RevStringView>;
@@ -338,10 +366,11 @@ WFAlignerST::WFAlignerST(uint32_t match, uint32_t mismatch, uint32_t gap_open, u
 
 inline std::pair<std::vector<CIGAROp>, int32_t>
 WFAlignerST::wavefront_align(const char* seq1, size_t len1,
-                           const char* seq2, size_t len2) const {
+                             const char* seq2, size_t len2) const {
     StringView str1(seq1, 0, len1);
     StringView str2(seq2, 0, len2);
-    return wavefront_dispatch<false, StdMem, STMatchFunc<StringView>>(str1, str2);
+    return wavefront_dispatch<false, StdMem, STMatchFunc<StringView>>(str1, str2,
+                                                                      std::numeric_limits<uint64_t>::max());
 }
 
 
@@ -350,7 +379,8 @@ WFAlignerST::wavefront_align_low_mem(const char* seq1, size_t len1,
                                    const char* seq2, size_t len2) const {
     StringView str1(seq1, 0, len1);
     StringView str2(seq2, 0, len2);
-    return wavefront_dispatch<false, LowMem, STMatchFunc<StringView>>(str1, str2);
+    return wavefront_dispatch<false, LowMem, STMatchFunc<StringView>>(str1, str2,
+                                                                      std::numeric_limits<uint64_t>::max());
 }
 
 
@@ -359,7 +389,19 @@ WFAlignerST::wavefront_align_recursive(const char* seq1, size_t len1,
                                      const char* seq2, size_t len2) const {
     StringView str1(seq1, 0, len1);
     StringView str2(seq2, 0, len2);
-    return wavefront_dispatch<false, Recursive, STMatchFunc<StringView>>(str1, str2);
+    return wavefront_dispatch<false, Recursive, STMatchFunc<StringView>>(str1, str2,
+                                                                         std::numeric_limits<uint64_t>::max());
+}
+
+
+
+inline std::pair<std::vector<CIGAROp>, int32_t>
+WFAlignerST::wavefront_align_adaptive(const char* seq1, size_t len1,
+                                      const char* seq2, size_t len2,
+                                      uint64_t max_mem) const {
+    StringView str1(seq1, 0, len1);
+    StringView str2(seq2, 0, len2);
+    return wavefront_dispatch<false, AdaptiveMem, STMatchFunc<StringView>>(str1, str2, max_mem);
 }
 
 inline std::tuple<std::vector<CIGAROp>, int32_t, std::pair<size_t, size_t>, std::pair<size_t, size_t>>

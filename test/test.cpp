@@ -77,6 +77,7 @@ int main(int argc, char** argv) {
     int mismatch = 1;
     int gap_open = 1;
     int gap_extend = 1;
+    int max_mem = 400;
     std::cerr << "making aligner" << std::endl;
     wfalm::WFAligner aligner(mismatch, gap_open, gap_extend);
     wfalm::WFAlignerST aligner_st(mismatch, gap_open, gap_extend);
@@ -95,10 +96,12 @@ int main(int argc, char** argv) {
     std::cout << "\to = " << gap_open << std::endl;
     std::cout << "\te = " << gap_extend << std::endl;
     std::cout << "\tp = " << prune << std::endl;
-    for (int mem : {0, 1, 2}) {
+    std::cout << "\tM = " << max_mem << std::endl;
+    for (int mem : {0, 1, 2, 3}) {
         for (bool use_st : {false, true}) {
             bool low_mem = (mem == 1);
             bool recursive = (mem == 2);
+            bool adaptive = (mem == 3);
             std::pair<std::vector<wfalm::CIGAROp>, int32_t> res;
             if (recursive && use_st) {
                 std::cout << "recursive algorithm with suffix tree match:" << std::endl;
@@ -109,6 +112,18 @@ int main(int argc, char** argv) {
                 std::cout << "recursive algorithm:" << std::endl;
                 res = aligner.wavefront_align_recursive(seq1.c_str(), seq1.size(),
                                                         seq2.c_str(), seq2.size());
+            }
+            else if (adaptive && use_st) {
+                std::cout << "adaptive algorithm with suffix tree match:" << std::endl;
+                res = aligner_st.wavefront_align_adaptive(seq1.c_str(), seq1.size(),
+                                                          seq2.c_str(), seq2.size(),
+                                                          max_mem);
+            }
+            else if (adaptive) {
+                std::cout << "adaptive algorithm:" << std::endl;
+                res = aligner.wavefront_align_adaptive(seq1.c_str(), seq1.size(),
+                                                       seq2.c_str(), seq2.size(),
+                                                       max_mem);
             }
             else if (low_mem && use_st) {
                 std::cout << "low memory algorithm with suffix tree match:" << std::endl;
@@ -157,6 +172,7 @@ int main(int argc, char** argv) {
     int mismatch_sw = 1;
     int gap_open_sw = 2;
     int gap_extend_sw = 1;
+    int max_mem_sw = 200;
     
     wfalm::WFAligner aligner_sw(match_sw, mismatch_sw, gap_open_sw, gap_extend_sw);
     wfalm::WFAlignerST aligner_sw_st(match_sw, mismatch_sw, gap_open_sw, gap_extend_sw);
@@ -177,6 +193,7 @@ int main(int argc, char** argv) {
     std::cout << "\tx = " << mismatch_sw << std::endl;
     std::cout << "\to = " << gap_open_sw << std::endl;
     std::cout << "\te = " << gap_extend_sw << std::endl;
+    std::cout << "\tM = " << max_mem_sw << std::endl;
     for (int mem : {0, 1, 2}) {
         for (bool use_st : {false, true}) {
             bool low_mem = (mem == 1);
