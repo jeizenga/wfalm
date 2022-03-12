@@ -78,7 +78,7 @@ public:
     
     /// If set to a number >= 0, prunes diagonals that fall this many anti-diagonals
     /// behind the furthest-reaching diagonal. This can lead to suboptimal alignments,
-    /// but in also can increase speed and reduce memory use. If set to a number < 0,
+    /// but it also can increase speed and reduce memory use. If set to a number < 0,
     /// no pruning is performed.
     int32_t lagging_diagonal_prune = -1;
     
@@ -145,6 +145,35 @@ public:
     wavefront_align(const char* seq1, size_t len1,
                     const char* seq2, size_t len2) const;
     
+    /// Locally align two sequences from a seed using the recursive WFA as an
+    /// alignment engine. *Can only called if WFAligner was initialized with
+    /// Smith-Waterman-Gotoh scoring parameters in the constructor.*
+    ///
+    /// Args:
+    ///   seq1             First sequence to be aligned (need not be null-terminated)
+    ///   len1             Length of first sequence to be aligned
+    ///   seq2             Second sequence to be aligned (need not be null-terminated)
+    ///   len2             Length of second sequence to be aligned
+    ///   anchor_begin_1   First index of the anchor on seq1
+    ///   anchor_end_1     Past-the-last index of the anchor on seq1
+    ///   anchor_begin_2   First index of the anchor on seq2
+    ///   anchor_end_2     Past-the-last index of the anchor on seq2
+    ///   anchor_is_match  If false, the anchor sequence will be aligned, otherwise
+    ///                    it will be assumed to be a match
+    ///
+    /// Return value:
+    ///   A tuple consisting of:
+    ///     - CIGAR string for alignment
+    ///     - the alignment score
+    ///     - a pair of indexes indicating the interval of aligned sequence on seq1
+    ///     - a pair of indexes indicating the interval of aligned sequence on seq2
+    inline std::tuple<std::vector<CIGAROp>, int32_t, std::pair<size_t, size_t>, std::pair<size_t, size_t>>
+    wavefront_align_local_recursive(const char* seq1, size_t len1,
+                                    const char* seq2, size_t len2,
+                                    size_t anchor_begin_1, size_t anchor_end_1,
+                                    size_t anchor_begin_2, size_t anchor_end_2,
+                                    bool anchor_is_match = true) const;
+    
     /// Locally align two sequences from a seed using the low memory WFA as an
     /// alignment engine. *Can only called if WFAligner was initialized with
     /// Smith-Waterman-Gotoh scoring parameters in the constructor.*
@@ -167,8 +196,7 @@ public:
     ///     - the alignment score
     ///     - a pair of indexes indicating the interval of aligned sequence on seq1
     ///     - a pair of indexes indicating the interval of aligned sequence on seq2
-    inline
-    std::tuple<std::vector<CIGAROp>, int32_t, std::pair<size_t, size_t>, std::pair<size_t, size_t>>
+    inline std::tuple<std::vector<CIGAROp>, int32_t, std::pair<size_t, size_t>, std::pair<size_t, size_t>>
     wavefront_align_local_low_mem(const char* seq1, size_t len1,
                                   const char* seq2, size_t len2,
                                   size_t anchor_begin_1, size_t anchor_end_1,
@@ -197,8 +225,7 @@ public:
     ///     - the alignment score
     ///     - a pair of indexes indicating the interval of aligned sequence on seq1
     ///     - a pair of indexes indicating the interval of aligned sequence on seq2
-    inline
-    std::tuple<std::vector<CIGAROp>, int32_t, std::pair<size_t, size_t>, std::pair<size_t, size_t>>
+    inline std::tuple<std::vector<CIGAROp>, int32_t, std::pair<size_t, size_t>, std::pair<size_t, size_t>>
     wavefront_align_local(const char* seq1, size_t len1,
                           const char* seq2, size_t len2,
                           size_t anchor_begin_1, size_t anchor_end_1,
@@ -429,7 +456,6 @@ protected:
     /*
      * wrappers to perform WFA alignment algorithms for dependency injection
      */
-    
     template<typename MatchFunc, typename StringType>
     struct StandardGlobalWFA {
         StandardGlobalWFA(const WFAligner* aligner) : aligner(aligner) {}
@@ -440,7 +466,6 @@ protected:
         }
         const WFAligner* aligner = nullptr;
     };
-    
     template<typename MatchFunc, typename StringType>
     struct StandardSemilocalWFA {
         StandardSemilocalWFA(const WFAligner* aligner) : aligner(aligner) {}
@@ -451,7 +476,6 @@ protected:
         }
         const WFAligner* aligner = nullptr;
     };
-    
     template<typename MatchFunc, typename StringType>
     struct LowMemGlobalWFA {
         LowMemGlobalWFA(const WFAligner* aligner) : aligner(aligner) {}
@@ -462,7 +486,6 @@ protected:
         }
         const WFAligner* aligner = nullptr;
     };
-    
     template<typename MatchFunc, typename StringType>
     struct LowMemSemilocalWFA {
         LowMemSemilocalWFA(const WFAligner* aligner) : aligner(aligner) {}
@@ -473,12 +496,34 @@ protected:
         }
         const WFAligner* aligner = nullptr;
     };
+    template<typename MatchFunc, typename StringType>
+    struct RecursiveGlobalWFA {
+        RecursiveGlobalWFA(const WFAligner* aligner) : aligner(aligner) {}
+        
+        inline std::pair<std::vector<CIGAROp>, int32_t>
+        operator()(const StringType& seq1, const StringType& seq2) const {
+            return aligner->wavefront_dispatch<false, WFAligner::Recursive, MatchFunc, StringType>(seq1, seq2);
+        }
+        const WFAligner* aligner = nullptr;
+    };
+    template<typename MatchFunc, typename StringType>
+    struct RecursiveSemilocalWFA {
+        RecursiveSemilocalWFA(const WFAligner* aligner) : aligner(aligner) {}
+        
+        inline std::pair<std::vector<CIGAROp>, int32_t>
+        operator()(const StringType& seq1, const StringType& seq2) const {
+            return aligner->wavefront_dispatch<true, WFAligner::Recursive, MatchFunc, StringType>(seq1, seq2);
+        }
+        const WFAligner* aligner = nullptr;
+    };
     
     // give the wrapper access to the dispatch function
     friend class StandardGlobalWFA<CompareMatchFunc<StringView>, StringView>;
     friend class StandardSemilocalWFA<CompareMatchFunc<RevStringView>, RevStringView>;
     friend class LowMemGlobalWFA<CompareMatchFunc<StringView>, StringView>;
     friend class LowMemSemilocalWFA<CompareMatchFunc<RevStringView>, RevStringView>;
+    friend class RecursiveGlobalWFA<CompareMatchFunc<StringView>, StringView>;
+    friend class RecursiveSemilocalWFA<CompareMatchFunc<RevStringView>, RevStringView>;
     
     /*
      * the central routine that is configured by all of the user-facing functions using templates
@@ -518,11 +563,6 @@ protected:
                                                      std::vector<std::pair<int32_t, Wavefront<IntType>>>& wf_bank,
                                                      int64_t s, int64_t d, const MatchFunc& match_func) const;
     
-    template<typename StringType, typename IntType>
-    inline void find_local_opt(const StringType& seq1, const StringType& seq2,
-                               int64_t s, const Wavefront<IntType>& wf,
-                               int64_t& opt, int64_t& opt_diag, int64_t& opt_s, size_t& max_s) const;
-    
     template<bool Local, typename IntType, typename StringType, typename MatchFunc>
     std::pair<std::vector<CIGAROp>, int32_t>
     wavefront_align_core(const StringType& seq1, const StringType& seq2,
@@ -533,9 +573,12 @@ protected:
     wavefront_align_low_mem_core(const StringType& seq1, const StringType& seq2,
                                  const MatchFunc& match_func) const;
     
+    template<bool Local, typename IntType, typename StringType, typename MatchFunc>
+    std::pair<std::vector<CIGAROp>, int32_t>
+    wavefront_align_recursive_core(const StringType& seq1, const StringType& seq2,
+                                   const MatchFunc& match_func) const;
     
-    
-    template<typename IntType, typename StringType, typename MatchFunc, typename WFVector1, typename WFVector2>
+    template<bool Local, typename IntType, typename StringType, typename MatchFunc, typename WFVector1, typename WFVector2>
     void wavefront_align_recursive_internal(const StringType& seq1, const StringType& seq2,
                                             int64_t lower_stripe_num, WFVector1& lower_stripe,
                                             int64_t upper_stripe_num, WFVector2& upper_stripe,
@@ -544,10 +587,10 @@ protected:
                                             std::vector<CIGAROp>& cigar,
                                             const MatchFunc& match_func) const;
     
-    template<typename IntType, typename StringType, typename MatchFunc>
-    std::pair<std::vector<CIGAROp>, int32_t>
-    wavefront_align_recursive_core(const StringType& seq1, const StringType& seq2,
-                                   const MatchFunc& match_func) const;
+    template<typename StringType, typename IntType>
+    inline void find_local_opt(const StringType& seq1, const StringType& seq2,
+                               int64_t s, const Wavefront<IntType>& wf,
+                               int64_t& opt, int64_t& opt_diag, int64_t& opt_s, size_t& max_s) const;
     
     template<typename PrefSemilocalWFA, typename AnchorGlobalWFA, typename SuffSemilocalWFA>
     std::tuple<std::vector<CIGAROp>, int32_t, std::pair<size_t, size_t>, std::pair<size_t, size_t>>
@@ -579,6 +622,24 @@ protected:
     
     // how many subsequent wavefronts are required to do DP with these scoring parameters
     int64_t stripe_width = 1;
+    
+private:
+    
+    /* debug functions*/
+    template<typename IntType>
+    inline void print_wf(const Wavefront<IntType>& wf, int diag_begin, int diag_end) const;
+    template<typename WFVector>
+    void print_wfs(const WFVector& wfs) const;
+    template<typename IntType>
+    inline void print_wfs_low_mem(const std::vector<std::pair<int32_t, Wavefront<IntType>>>& wf_bank,
+                                  const std::deque<Wavefront<IntType>>& wf_buffer, int s) const;
+    template<typename IntType>
+    inline void print_wfs_tb(const std::deque<Wavefront<IntType>>& traceback_block,
+                             const std::vector<std::pair<int32_t, Wavefront<IntType>>>& wf_bank,
+                             int i) const;
+    template <typename StringType, typename WFVector>
+    void wavefront_viz(const StringType& seq1, const StringType& seq2,
+                       const WFVector& wfs) const;
 };
 
 // default
@@ -587,8 +648,9 @@ inline WFAligner::WFAligner() {}
 inline WFAligner::WFAligner(uint32_t _mismatch, uint32_t _gap_open, uint32_t _gap_extend) {
     // reduce by common factor to accelerate the alignment
     if (_mismatch == 0 || _gap_extend == 0) {
-        std::cerr << "error:[WFAligner] mismatch and extend penalties must both be non-zero" << std::endl;
-        exit(1);
+        std::stringstream strm;
+        strm << "error:[WFAligner] mismatch and extend penalties must both be non-zero" << std::endl;
+        throw std::runtime_error(strm.str());
     }
     factor = gcd(_mismatch, _gap_extend);
     if (_gap_open != 0) {
@@ -605,8 +667,9 @@ inline WFAligner::WFAligner(uint32_t _match, uint32_t _mismatch, uint32_t _gap_o
     : WFAligner(2 * (_match + _mismatch), 2 * _gap_open, 2 * _gap_extend + _match)
 {
     if (_match == 0) {
-        std::cerr << "error:[WFAligner] match score must be an integer > 0 for Smith-Waterman-Gotoh-style score parameters: " << match << "\n";
-        exit(1);
+        std::stringstream strm;
+        strm << "error:[WFAligner] match score must be an integer > 0 for Smith-Waterman-Gotoh-style score parameters: " << match << "\n";
+        throw std::runtime_error(strm.str());
     }
     match = _match;
 }
@@ -674,12 +737,28 @@ WFAligner::wavefront_align_local_low_mem(const char* seq1, size_t len1,
                                                                    anchor_is_match);
 }
 
+inline std::tuple<std::vector<CIGAROp>, int32_t, std::pair<size_t, size_t>, std::pair<size_t, size_t>>
+WFAligner::wavefront_align_local_recursive(const char* seq1, size_t len1,
+                                           const char* seq2, size_t len2,
+                                           size_t anchor_begin_1, size_t anchor_end_1,
+                                           size_t anchor_begin_2, size_t anchor_end_2,
+                                           bool anchor_is_match) const {
+    
+    // configure the alignment and match functions
+    typedef RecursiveSemilocalWFA<CompareMatchFunc<RevStringView>, RevStringView> PrefWFA;
+    typedef RecursiveGlobalWFA<CompareMatchFunc<StringView>, StringView> AnchorWFA;
+    typedef RecursiveSemilocalWFA<CompareMatchFunc<StringView>, StringView> SuffWFA;
+    
+    return wavefront_align_local_core<PrefWFA, AnchorWFA, SuffWFA>(seq1, len1, seq2, len2,
+                                                                   anchor_begin_1, anchor_end_1,
+                                                                   anchor_begin_2, anchor_end_2,
+                                                                   anchor_is_match);
+}
+
 template<bool Local, int Mem, typename MatchFunc, typename StringType>
 inline std::pair<std::vector<CIGAROp>, int32_t>
 WFAligner::wavefront_dispatch(const StringType& seq1, const StringType& seq2) const {
     
-    // this is not yet implemented
-    static_assert(!(Local && Mem == Recursive), "Recursive local alignment not yet implemented");
     // make a match function as directed by the calling environment
     MatchFunc match_func(seq1, seq2);
     
@@ -698,7 +777,7 @@ WFAligner::wavefront_dispatch(const StringType& seq1, const StringType& seq2) co
                 break;
                 
             case Recursive:
-                result = wavefront_align_recursive_core<int8_t>(seq1, seq2, match_func);
+                result = wavefront_align_recursive_core<Local, int8_t>(seq1, seq2, match_func);
                 break;
         }
     }
@@ -713,7 +792,7 @@ WFAligner::wavefront_dispatch(const StringType& seq1, const StringType& seq2) co
                 break;
                 
             case Recursive:
-                result = wavefront_align_recursive_core<int16_t>(seq1, seq2, match_func);
+                result = wavefront_align_recursive_core<Local, int16_t>(seq1, seq2, match_func);
                 break;
         }
     }
@@ -728,7 +807,7 @@ WFAligner::wavefront_dispatch(const StringType& seq1, const StringType& seq2) co
                 break;
                 
             case Recursive:
-                result = wavefront_align_recursive_core<int32_t>(seq1, seq2, match_func);
+                result = wavefront_align_recursive_core<Local, int32_t>(seq1, seq2, match_func);
                 break;
         }
     }
@@ -739,6 +818,7 @@ WFAligner::wavefront_dispatch(const StringType& seq1, const StringType& seq2) co
     result.second *= factor;
     
     // for local alignment, the conversion back will take place in the local core
+    // because we need to measure the length of the aligned portion
     if (match && !Local) {
         result.second = convert_score(seq1.size(), seq2.size(), result.second);
     }
@@ -912,7 +992,7 @@ WFAligner::wavefront_align_low_mem_core(const StringType& seq1, const StringType
                                                              match_func), s);
 }
 
-template<typename IntType, typename StringType, typename MatchFunc>
+template<bool Local, typename IntType, typename StringType, typename MatchFunc>
 std::pair<std::vector<CIGAROp>, int32_t>
 WFAligner::wavefront_align_recursive_core(const StringType& seq1, const StringType& seq2,
                                           const MatchFunc& match_func) const {
@@ -926,29 +1006,52 @@ WFAligner::wavefront_align_recursive_core(const StringType& seq1, const StringTy
     // use these to know when we've finished the alignment
     int32_t final_diag = seq1.size() - seq2.size();
     int32_t final_anti_diag = seq1.size() + seq2.size();
+
+    // trackers used for local alignment
+    int64_t opt = 0;
+    int64_t opt_diag = 0;
+    int64_t opt_s = 0;
+    size_t max_s = std::numeric_limits<size_t>::max();
+    std::vector<Wavefront<IntType>> opt_stripe;
     
     // init wavefront to the upper left of both sequences' starts
     std::deque<Wavefront<IntType>> wf_buffer;
     wf_buffer.emplace_back(0, 1);
     wf_buffer.front().M[0] = 0;
-    int32_t s = 0;
+    size_t s = 0;
     
+    // we need to remember the first stripe for the recursive step
     std::vector<Wavefront<IntType>> first_stripe;
     
     // do wavefront iterations until hit max score or alignment finishes
     wavefront_extend(seq1, seq2, wf_buffer.front(), match_func);
-    while (!wavefront_reached(wf_buffer.back(), final_diag, final_anti_diag)) {
-        
+    if (Local) {
+        find_local_opt(seq1, seq2, s, wf_buffer.front(),
+                       opt, opt_diag, opt_s, max_s);
+    }
+    while (!wavefront_reached(wf_buffer.back(), final_diag, final_anti_diag) &&
+           s <= max_s) {
         // increase score and get the next wavefront
         ++s;
         wf_buffer.emplace_back(wavefront_next<IntType>(seq1, seq2, wf_buffer));
+        //std::cerr << "DP to score " << s << std::endl;
         
         if (wf_buffer.size() == 2 * stripe_width) {
             // we need to evict a stripe wavefront from the buffer to continue
+            //std::cerr << "evicting a stripe" << std::endl;
             for (int64_t i = 0; i < stripe_width; ++i) {
                 if (s + 1 == 2 * stripe_width) {
                     // we need to remember the first stripe when we evict it
                     first_stripe.emplace_back(std::move(wf_buffer.front()));
+                }
+                else if (Local && opt_s > s - 2 * stripe_width && opt_s <= s - stripe_width) {
+                    // we're ejecting the stripe that contains the local opt, so
+                    // we remember it for later
+                    if (i == 0) {
+                        // we might have an existing stripe in the opt stripe
+                        opt_stripe.clear();
+                    }
+                    opt_stripe.emplace_back(std::move(wf_buffer.front()));
                 }
                 wf_buffer.pop_front();
             }
@@ -958,13 +1061,39 @@ WFAligner::wavefront_align_recursive_core(const StringType& seq1, const StringTy
         // follow matches
         wavefront_extend(seq1, seq2, wf_buffer.back(), match_func);
         
+        if (Local) {
+            find_local_opt(seq1, seq2, s, wf_buffer.back(),
+                           opt, opt_diag, opt_s, max_s);
+        }
         // prune lagging diagonals
-        // FIXME: need to update this for local alignment
-        wavefront_prune<false>(wf_buffer.back());
+        wavefront_prune<Local>(wf_buffer.back());
     }
     
-    int64_t traceback_d = final_diag;
-    int64_t traceback_s = s;
+    int64_t traceback_d;
+    int64_t traceback_s;
+    int32_t score;
+    if (Local) {
+        traceback_d = opt_diag;
+        traceback_s = opt_s;
+        score = opt_s;
+        
+        // TODO: i don't like repeating this formula 3x in different places...
+        int64_t opt_stripe_num = (opt_s + stripe_width - 1) / stripe_width;
+        if (opt_stripe_num != 0 && opt_stripe_num != (s - wf_buffer.size() + stripe_width) / stripe_width) {
+            // the local optimum did not occur in the first or last stripe, so we replace the contents
+            // of the last stripe with the opt's stripe, which we should have retained
+            wf_buffer.clear();
+            for (auto& wf : opt_stripe) {
+                wf_buffer.emplace_back(std::move(wf));
+            }
+        }
+    }
+    else {
+        traceback_d = final_diag;
+        traceback_s = s;
+        score = s;
+    }
+    
     std::vector<CIGAROp> cigar;
     if (s < 2 * stripe_width) {
         // we finished the entire alignment without evicting, so we just do normal traceback
@@ -978,17 +1107,23 @@ WFAligner::wavefront_align_recursive_core(const StringType& seq1, const StringTy
         cigar = wavefront_traceback(seq1, seq2, traceback_wfs,
                                     traceback_s, traceback_d);
     }
+    else if (Local && traceback_s < stripe_width) {
+        // we encountered the local optimum within the first stripe, so we can skip complicated
+        // traceback logic
+        cigar = wavefront_traceback(seq1, seq2, first_stripe,
+                                    traceback_s, traceback_d);
+    }
     else {
         // we enter the recursive portion of the algorithm
-        int64_t stripe_num = (s - wf_buffer.size() + stripe_width) / stripe_width; // s+1 and w-1 cancel out
+        int64_t stripe_num = (traceback_s - wf_buffer.size() + stripe_width) / stripe_width; // s+1 and w-1 cancel out
         WFMatrix_t traceback_mat = MAT_M;
         int64_t lead_matches = 0;
-        wavefront_align_recursive_internal<IntType>(seq1, seq2,
-                                                    0, first_stripe,
-                                                    stripe_num, wf_buffer,
-                                                    traceback_s, traceback_d,
-                                                    traceback_mat, lead_matches,
-                                                    cigar, match_func);
+        wavefront_align_recursive_internal<Local, IntType>(seq1, seq2,
+                                                           0, first_stripe,
+                                                           stripe_num, wf_buffer,
+                                                           traceback_s, traceback_d,
+                                                           traceback_mat, lead_matches,
+                                                           cigar, match_func);
         assert(traceback_s == 0 && traceback_d == 0 && traceback_mat == MAT_M);
         // the CIGAR is constructed in reverse, unreverse it
         std::reverse(cigar.begin(), cigar.end());
@@ -997,11 +1132,11 @@ WFAligner::wavefront_align_recursive_core(const StringType& seq1, const StringTy
     }
     
     
-    return std::make_pair(cigar, s);
+    return std::make_pair(cigar, int32_t(score));
 }
 
 
-template<typename IntType, typename StringType, typename MatchFunc, typename WFVector1, typename WFVector2>
+template<bool Local, typename IntType, typename StringType, typename MatchFunc, typename WFVector1, typename WFVector2>
 void WFAligner::wavefront_align_recursive_internal(const StringType& seq1, const StringType& seq2,
                                                    int64_t lower_stripe_num, WFVector1& lower_stripe,
                                                    int64_t upper_stripe_num, WFVector2& upper_stripe,
@@ -1017,6 +1152,7 @@ void WFAligner::wavefront_align_recursive_internal(const StringType& seq1, const
         for (auto& wf : upper_stripe) {
             lower_stripe.emplace_back(std::move(wf));
         }
+        
         
         // convert the current s into an index within this block
         int64_t relative_s = traceback_s - lower_stripe_num * stripe_width;
@@ -1050,7 +1186,7 @@ void WFAligner::wavefront_align_recursive_internal(const StringType& seq1, const
             wavefront_extend(seq1, seq2, wf_buffer.back(), match_func);
             // prune lagging diagonals
             // TODO: need to update this to Local when it's implemented
-            wavefront_prune<false>(wf_buffer.back());
+            wavefront_prune<Local>(wf_buffer.back());
             
             if (wf_buffer.size() == 2 * stripe_width) {
                 // we've completed a stripe, we can now evict the previous one
@@ -1067,19 +1203,19 @@ void WFAligner::wavefront_align_recursive_internal(const StringType& seq1, const
         }
         
         // recurse into upper half
-        wavefront_align_recursive_internal<IntType>(seq1, seq2,
-                                                    target_stripe_num, wf_buffer,
-                                                    upper_stripe_num, upper_stripe,
-                                                    traceback_s, traceback_d,
-                                                    traceback_mat, lead_matches,
-                                                    cigar, match_func);
+        wavefront_align_recursive_internal<Local, IntType>(seq1, seq2,
+                                                           target_stripe_num, wf_buffer,
+                                                           upper_stripe_num, upper_stripe,
+                                                           traceback_s, traceback_d,
+                                                           traceback_mat, lead_matches,
+                                                           cigar, match_func);
         // recurse into lower half
-        wavefront_align_recursive_internal<IntType>(seq1, seq2,
-                                                    lower_stripe_num, lower_stripe,
-                                                    target_stripe_num, wf_buffer,
-                                                    traceback_s, traceback_d,
-                                                    traceback_mat, lead_matches,
-                                                    cigar, match_func);
+        wavefront_align_recursive_internal<Local, IntType>(seq1, seq2,
+                                                           lower_stripe_num, lower_stripe,
+                                                           target_stripe_num, wf_buffer,
+                                                           traceback_s, traceback_d,
+                                                           traceback_mat, lead_matches,
+                                                           cigar, match_func);
     }
 }
 
@@ -1090,6 +1226,12 @@ WFAligner::wavefront_align_local_core(const char* seq1, size_t len1,
                                       size_t anchor_begin_1, size_t anchor_end_1,
                                       size_t anchor_begin_2, size_t anchor_end_2,
                                       bool anchor_is_match) const {
+    
+    if (match == 0) {
+        std::stringstream strm;
+        strm << "error:[WFAligner] aligner must be initialized with Smith-Waterman-Gotoh-style scoring parameters to perform local alignment" << std::endl;
+        throw std::runtime_error(strm.str());
+    }
     
     // tail align the prefix
     RevStringView pref1(seq1, 0, anchor_begin_1);
@@ -1640,397 +1782,214 @@ inline void WFAligner::coalesce_cigar(std::vector<CIGAROp>& cigar) const {
     cigar.resize(into + 1);
 }
 
-/*
-// * Score parameters for wavefront alignment. On opening a insertion or
-// * deletion, *both* the gap open and gap extend penalties are applied.
-// */
-//struct WFScores {
-//    WFScores(uint32_t mismatch, uint32_t gap_open, uint32_t gap_extend);
-//    WFScores() = default;
-//
-//    uint32_t mismatch;
-//    uint32_t gap_open;
-//    uint32_t gap_extend;
-//};
-//
-///*
-// * Score parameters for Smith-Waterman-Gotoh or Needleman-Wunsch alignment.
-// * On opening a insertion or deletion, *both* the gap open and gap extend
-// * penalties are applied.
-// */
-//struct SWGScores {
-//    SWGScores(uint32_t match, uint32_t mismatch, uint32_t gap_open, uint32_t gap_extend);
-//    SWGScores() = default;
-//
-//    uint32_t match;
-//    uint32_t mismatch;
-//    uint32_t gap_open;
-//    uint32_t gap_extend;
-//};
-//
-///*
-// * Operation in a CIGAR string (as defined in SAM format specification)
-// */
-//struct CIGAROp {
-//    CIGAROp(char op, uint32_t len);
-//    CIGAROp() = default;
-//
-//    char op;
-//    uint32_t len;
-//};
-//
-///// Globally align two sequences using the low-memory WFA algorithm using O(s log s) memory.
-/////
-///// Args:
-/////   seq1         First sequence to be aligned
-/////   seq2         Second sequence to be aligned
-/////   scores       WFA-style scoring parameters
-/////   prune_diff   Optional pruning parameter. If set >= 0, will prune diagonals
-/////                that fall behind the furthest reaching diagonal by prune_diff
-/////                antidiagionals.
-/////
-///// Return value:
-/////   Pair consisting of CIGAR string for alignment and the alignment score.
-//inline
-//std::pair<std::vector<CIGAROp>, int32_t>
-//wavefront_align_recursive(const std::string& seq1, const std::string& seq2,
-//                          const WFScores& scores, int32_t prune_diff = -1);
-//
-///// Globally align two sequences using the low-memory WFA algorithm using O(s log s) memory.
-/////
-///// Args:
-/////   seq1         First sequence to be aligned
-/////   seq2         Second sequence to be aligned
-/////   scores       Smith-Waterman-Gotoh-style scoring parameters
-/////   prune_diff   Optional pruning parameter. If set >= 0, will prune diagonals
-/////                that fall behind the furthest reaching diagonal by prune_diff
-/////                antidiagionals.
-/////
-///// Return value:
-/////   Pair consisting of CIGAR string for alignment and the alignment score.
-//inline
-//std::pair<std::vector<CIGAROp>, int32_t>
-//wavefront_align_recursive(const std::string& seq1, const std::string& seq2,
-//                          const SWGScores& scores, int32_t prune_diff = -1);
-//
-//
-///// Globally align two sequences using the low-memory WFA algorithm using O(s^3/2) memory.
-/////
-///// Args:
-/////   seq1         First sequence to be aligned
-/////   seq2         Second sequence to be aligned
-/////   scores       WFA-style scoring parameters
-/////   prune_diff   Optional pruning parameter. If set >= 0, will prune diagonals
-/////                that fall behind the furthest reaching diagonal by prune_diff
-/////                antidiagionals.
-/////
-///// Return value:
-/////   Pair consisting of CIGAR string for alignment and the alignment score.
-//inline
-//std::pair<std::vector<CIGAROp>, int32_t>
-//wavefront_align_low_mem(const std::string& seq1, const std::string& seq2,
-//                        const WFScores& scores, int32_t prune_diff = -1);
-//
-///// Globally align two sequences using the low-memory WFA algorithm using O(s^3/2) memory.
-/////
-///// Args:
-/////   seq1         First sequence to be aligned
-/////   seq2         Second sequence to be aligned
-/////   scores       Smith-Waterman-Gotoh-style scoring parameters
-/////   prune_diff   Optional pruning parameter. If set >= 0, will prune diagonals
-/////                that fall behind the furthest reaching diagonal by prune_diff
-/////                antidiagionals.
-/////
-///// Return value:
-/////   Pair consisting of CIGAR string for alignment and the alignment score.
-//inline
-//std::pair<std::vector<CIGAROp>, int32_t>
-//wavefront_align_low_mem(const std::string& seq1, const std::string& seq2,
-//                        const SWGScores& scores, int32_t prune_diff = -1);
-//
-///// Globally align two sequences using the standard WFA algorithm using O(s^2) memory.
-/////
-///// Args:
-/////   seq1         First sequence to be aligned
-/////   seq2         Second sequence to be aligned
-/////   scores       WFA-style scoring parameters
-/////   prune_diff   Optional pruning parameter. If set >= 0, will prune diagonals
-/////                that fall behind the furthest reaching diagonal by prune_diff
-/////                antidiagionals.
-/////
-///// Return value:
-/////   Pair consisting of CIGAR string for alignment and the alignment score.
-//inline
-//std::pair<std::vector<CIGAROp>, int32_t>
-//wavefront_align(const std::string& seq1, const std::string& seq2,
-//                const WFScores& scores, int32_t prune_diff = -1);
-//
-///// Globally align two sequences using the standard WFA algorithm using O(s^2) memory.
-/////
-///// Args:
-/////   seq1         First sequence to be aligned
-/////   seq2         Second sequence to be aligned
-/////   scores       Smith-Waterman-Gotoh-style scoring parameters
-/////   prune_diff   Optional pruning parameter. If set >= 0, will prune diagonals
-/////                that fall behind the furthest reaching diagonal by prune_diff
-/////                antidiagionals.
-/////
-///// Return value:
-/////   Pair consisting of CIGAR string for alignment and the alignment score.
-//inline
-//std::pair<std::vector<CIGAROp>, int32_t>
-//wavefront_align(const std::string& seq1, const std::string& seq2,
-//                const SWGScores& scores, int32_t prune_diff = -1);
-
-
-
-
-
-
-
-/*******************************************************************
- *******************************************************************
- ***             Only internal functions below here              ***
- *******************************************************************
- *******************************************************************/
-
-
-namespace internal {
-
-
-//namespace debug {
-//
-////#define debug_viz
-//
-//template<typename StringType>
-//std::string str(const StringType& str) {
-//    std::stringstream strm;
-//    for (size_t i = 0; i < str.size(); ++i) {
-//        strm << str[i];
-//    }
-//    return strm.str();
-//}
-//
-//template<typename IntType>
-//inline
-//void print_wf(const Wavefront<IntType>& wf, int diag_begin, int diag_end) {
-//    for (int d = diag_begin; d < diag_end; ++d) {
-//        if (d >= wf.diag_begin && d < wf.diag_begin + (int) wf.size()) {
-//            int a = wf.M[d - wf.diag_begin];
-//            if (a > -100) {
-//                std::cerr << (int) a;
-//            }
-//            else {
-//                std::cerr << ".";
-//            }
-//        }
-//        std::cerr << "\t";
-//    }
-//    std::cerr << std::endl;
-//    for (int d = diag_begin; d < diag_end; ++d) {
-//        if (d >= wf.diag_begin && d < wf.diag_begin + (int) wf.size()) {
-//            int a = wf.I[d - wf.diag_begin];
-//            if (a > -100) {
-//                std::cerr << (int) a;
-//            }
-//            else {
-//                std::cerr << ".";
-//            }
-//        }
-//        std::cerr << "\t";
-//    }
-//    std::cerr << std::endl;
-//    for (int d = diag_begin; d < diag_end; ++d) {
-//        if (d >= wf.diag_begin && d < wf.diag_begin + (int) wf.size()) {
-//            int a = wf.D[d - wf.diag_begin];
-//            if (a > -100) {
-//                std::cerr << (int) a;
-//            }
-//            else {
-//                std::cerr << ".";
-//            }
-//        }
-//        std::cerr << "\t";
-//    }
-//    std::cerr << std::endl;
-//}
-//
-//template<typename WFVector>
-//void print_wfs(const WFVector& wfs) {
-//    int min_begin = std::numeric_limits<int>::max();
-//    int max_end = std::numeric_limits<int>::min();
-//    for (int s = 0; s < wfs.size(); ++s) {
-//        min_begin = std::min<int>(wfs[s].diag_begin, min_begin);
-//        max_end = std::max<int>(wfs[s].diag_begin + wfs[s].size(), max_end);
-//    }
-//    std::cerr << "# print wfs #" << std::endl;
-//    for (int d = min_begin; d < max_end; ++d) {
-//        std::cerr << d << "\t";
-//    }
-//    std::cerr << std::endl;
-//    for (int s = 0; s < wfs.size(); ++s) {
-//        std::cerr << "score " << s << std::endl;
-//        print_wf(wfs[s], min_begin, max_end);
-//    }
-//}
-//
-//template<typename IntType>
-//inline
-//void print_wfs_low_mem(const std::vector<std::pair<int32_t, Wavefront<IntType>>>& wf_bank,
-//                       const std::deque<Wavefront<IntType>>& wf_buffer, int s) {
-//    int min_begin = std::numeric_limits<int>::max();
-//    int max_end = std::numeric_limits<int>::min();
-//    for (int i = 0; i < wf_bank.size(); ++i) {
-//        min_begin = std::min<int>(wf_bank[i].second.diag_begin, min_begin);
-//        max_end = std::max<int>(wf_bank[i].second.diag_begin + wf_bank[i].second.size(), max_end);
-//    }
-//    for (int i = 0; i < wf_buffer.size(); ++i) {
-//        min_begin = std::min<int>(wf_buffer[i].diag_begin, min_begin);
-//        max_end = std::max<int>(wf_buffer[i].diag_begin + wf_buffer[i].size(), max_end);
-//    }
-//    std::cerr << "### print wf bank ###" << std::endl;
-//    for (int d = min_begin; d < max_end; ++d) {
-//        std::cerr << d << "\t";
-//    }
-//    std::cerr << std::endl;
-//    for (int t = 0, i = 0; !wf_bank.empty() && t <= wf_bank.back().first; ++t) {
-//        std::cerr << "score " << t << std::endl;
-//        while (t > wf_bank[i].first) {
-//            ++i;
-//        }
-//        if (t == wf_bank[i].first) {
-//            print_wf(wf_bank[i].second, min_begin, max_end);
-//        }
-//        else {
-//            for (int m = 0; m < 3; ++m) {
-//                for (int d = min_begin; d < max_end; ++d) {
-//                    std::cerr << "-\t";
-//                }
-//                std::cerr << std::endl;
-//            }
-//        }
-//    }
-//    std::cerr << "### print wf buffer ###" << std::endl;
-//    for (int d = min_begin; d < max_end; ++d) {
-//        std::cerr << d << "\t";
-//    }
-//    std::cerr << std::endl;
-//    for (int i = 0; i < wf_buffer.size(); ++i) {
-//        std::cerr << "score " << s + i - wf_buffer.size() + 1 << std::endl;
-//        print_wf(wf_buffer[i], min_begin, max_end);
-//    }
-//}
-//
-//template<typename IntType>
-//inline
-//void print_wfs_tb(const std::deque<Wavefront<IntType>>& traceback_block,
-//                  const std::vector<std::pair<int32_t, Wavefront<IntType>>>& wf_bank,
-//                  int i) {
-//
-//    std::cerr << "### print traceback block " << wf_bank[i].first << ":" << wf_bank[i].first + traceback_block.size() << " ###" << std::endl;
-//    int min_begin = std::numeric_limits<int>::max();
-//    int max_end = std::numeric_limits<int>::min();
-//    for (int k = 0; k < traceback_block.size(); ++k) {
-//        min_begin = std::min<int>(min_begin, traceback_block[k].diag_begin);
-//        max_end = std::max<int>(max_end, traceback_block[k].diag_begin + traceback_block[k].size());
-//    }
-//    for (int d = min_begin; d < max_end; ++d) {
-//        std::cerr << d << "\t";
-//    }
-//    std::cerr << std::endl;
-//    for (int k = 0; k < traceback_block.size(); ++k) {
-//        std::cerr << "score " << wf_bank[i].first + k << std::endl;
-//        print_wf(traceback_block[k], min_begin, max_end);
-//    }
-//}
-//
-//template <typename StringType, typename WFVector>
-//void wavefront_viz(const StringType& seq1, const StringType& seq2,
-//                   const WFVector& wfs,
-//                   const WFScores& scores) {
-//
-//    std::vector<std::vector<int>> matrix(seq1.size() + 1, std::vector<int>(seq2.size() + 1, -1));
-//
-//    std::vector<std::vector<bool>> opt(seq1.size() + 1, std::vector<bool>(seq2.size() + 1, false));
-//
-//
-//    int32_t final_diag = seq1.size() - seq2.size();
-//    int32_t final_anti_diag = seq1.size() + seq2.size();
-//
-//    if (wavefront_reached(wfs[wfs.size() - 1], final_diag, final_anti_diag)) {
-//        auto cigar = wavefront_traceback(seq1, seq2, wfs, wfs.size() - 1, final_diag);
-//        int i = 0, j = 0;
-//        opt[i][j] = true;
-//        for (auto& op : cigar) {
-//            for (int k = 0; k < op.len; ++k) {
-//                if (op.op == 'M' || op.op == 'I') {
-//                    ++i;
-//                }
-//                if (op.op == 'M' || op.op == 'D') {
-//                    ++j;
-//                }
-//                opt[i][j] = true;
-//            }
-//        }
-//    }
-//
-//    for (int s = 0; s < wfs.size(); ++s) {
-//        const auto& wf = wfs[s];
-//        for (int k = 0; k < wf.size(); ++k) {
-//            int d = wf.diag_begin + k;
-//            int a = wf.M[k];
-//            if (a < -2) {
-//                continue;
-//            }
-//            int i = (a + d) / 2;
-//            int j = (a - d) / 2;
-//            while (i >= 0 && j >= 0 && i < seq1.size() && j < seq2.size() && seq1[i] == seq2[j]
-//                   && a != wf.I[k] && a != wf.D[k]) {
-//                matrix[i + 1][j + 1] = s;
-//                --i;
-//                --j;
-//                a -= 2;
-//            }
-//            matrix[i + 1][j + 1] = s;
-//        }
-//    }
-//
-//
-//
-//    std::cerr << "\t";
-//    for (auto c : seq2) {
-//        std::cerr << "\t" << c;
-//    }
-//    std::cerr << std::endl;
-//    for (int i = 0; i < seq1.size() + 1; ++i) {
-//        if (i != 0) {
-//            std::cerr << seq1[i - 1];
-//        }
-//        for (int j = 0; j < seq2.size() + 1; ++j) {
-//            std::cerr << '\t';
-//            if (matrix[i][j] >= 0) {
-//                std::cerr << matrix[i][j];
-//            }
-//            else {
-//                std::cerr << '.';
-//            }
-//            if (opt[i][j]) {
-//                std::cerr << '*';
-//            }
-//        }
-//        std::cerr << std::endl;
-//    }
-//}
-//
-//} // end namespace debug
-
-
-
-
-} // end namespace internal
-
-
+template<typename IntType>
+inline void WFAligner::print_wf(const WFAligner::Wavefront<IntType>& wf, int diag_begin, int diag_end) const {
+    for (int d = diag_begin; d < diag_end; ++d) {
+        if (d >= wf.diag_begin && d < wf.diag_begin + (int) wf.size()) {
+            int a = wf.M[d - wf.diag_begin];
+            if (a > -100) {
+                std::cerr << (int) a;
+            }
+            else {
+                std::cerr << ".";
+            }
+        }
+        std::cerr << "\t";
+    }
+    std::cerr << std::endl;
+    for (int d = diag_begin; d < diag_end; ++d) {
+        if (d >= wf.diag_begin && d < wf.diag_begin + (int) wf.size()) {
+            int a = wf.I[d - wf.diag_begin];
+            if (a > -100) {
+                std::cerr << (int) a;
+            }
+            else {
+                std::cerr << ".";
+            }
+        }
+        std::cerr << "\t";
+    }
+    std::cerr << std::endl;
+    for (int d = diag_begin; d < diag_end; ++d) {
+        if (d >= wf.diag_begin && d < wf.diag_begin + (int) wf.size()) {
+            int a = wf.D[d - wf.diag_begin];
+            if (a > -100) {
+                std::cerr << (int) a;
+            }
+            else {
+                std::cerr << ".";
+            }
+        }
+        std::cerr << "\t";
+    }
+    std::cerr << std::endl;
 }
+
+template<typename WFVector>
+void WFAligner::print_wfs(const WFVector& wfs) const {
+    int min_begin = std::numeric_limits<int>::max();
+    int max_end = std::numeric_limits<int>::min();
+    for (int s = 0; s < wfs.size(); ++s) {
+        min_begin = std::min<int>(wfs[s].diag_begin, min_begin);
+        max_end = std::max<int>(wfs[s].diag_begin + wfs[s].size(), max_end);
+    }
+    std::cerr << "# print wfs #" << std::endl;
+    for (int d = min_begin; d < max_end; ++d) {
+        std::cerr << d << "\t";
+    }
+    std::cerr << std::endl;
+    for (int s = 0; s < wfs.size(); ++s) {
+        std::cerr << "score " << s << std::endl;
+        print_wf(wfs[s], min_begin, max_end);
+    }
+}
+
+template<typename IntType>
+inline void WFAligner::print_wfs_low_mem(const std::vector<std::pair<int32_t, WFAligner::Wavefront<IntType>>>& wf_bank,
+                                         const std::deque<WFAligner::Wavefront<IntType>>& wf_buffer, int s) const {
+    int min_begin = std::numeric_limits<int>::max();
+    int max_end = std::numeric_limits<int>::min();
+    for (int i = 0; i < wf_bank.size(); ++i) {
+        min_begin = std::min<int>(wf_bank[i].second.diag_begin, min_begin);
+        max_end = std::max<int>(wf_bank[i].second.diag_begin + wf_bank[i].second.size(), max_end);
+    }
+    for (int i = 0; i < wf_buffer.size(); ++i) {
+        min_begin = std::min<int>(wf_buffer[i].diag_begin, min_begin);
+        max_end = std::max<int>(wf_buffer[i].diag_begin + wf_buffer[i].size(), max_end);
+    }
+    std::cerr << "### print wf bank ###" << std::endl;
+    for (int d = min_begin; d < max_end; ++d) {
+        std::cerr << d << "\t";
+    }
+    std::cerr << std::endl;
+    for (int t = 0, i = 0; !wf_bank.empty() && t <= wf_bank.back().first; ++t) {
+        std::cerr << "score " << t << std::endl;
+        while (t > wf_bank[i].first) {
+            ++i;
+        }
+        if (t == wf_bank[i].first) {
+            print_wf(wf_bank[i].second, min_begin, max_end);
+        }
+        else {
+            for (int m = 0; m < 3; ++m) {
+                for (int d = min_begin; d < max_end; ++d) {
+                    std::cerr << "-\t";
+                }
+                std::cerr << std::endl;
+            }
+        }
+    }
+    std::cerr << "### print wf buffer ###" << std::endl;
+    for (int d = min_begin; d < max_end; ++d) {
+        std::cerr << d << "\t";
+    }
+    std::cerr << std::endl;
+    for (int i = 0; i < wf_buffer.size(); ++i) {
+        std::cerr << "score " << s + i - wf_buffer.size() + 1 << std::endl;
+        print_wf(wf_buffer[i], min_begin, max_end);
+    }
+}
+
+template<typename IntType>
+inline void WFAligner::print_wfs_tb(const std::deque<WFAligner::Wavefront<IntType>>& traceback_block,
+                                    const std::vector<std::pair<int32_t, WFAligner::Wavefront<IntType>>>& wf_bank,
+                                    int i) const {
+
+    std::cerr << "### print traceback block " << wf_bank[i].first << ":" << wf_bank[i].first + traceback_block.size() << " ###" << std::endl;
+    int min_begin = std::numeric_limits<int>::max();
+    int max_end = std::numeric_limits<int>::min();
+    for (int k = 0; k < traceback_block.size(); ++k) {
+        min_begin = std::min<int>(min_begin, traceback_block[k].diag_begin);
+        max_end = std::max<int>(max_end, traceback_block[k].diag_begin + traceback_block[k].size());
+    }
+    for (int d = min_begin; d < max_end; ++d) {
+        std::cerr << d << "\t";
+    }
+    std::cerr << std::endl;
+    for (int k = 0; k < traceback_block.size(); ++k) {
+        std::cerr << "score " << wf_bank[i].first + k << std::endl;
+        print_wf(traceback_block[k], min_begin, max_end);
+    }
+}
+
+template <typename StringType, typename WFVector>
+void WFAligner::wavefront_viz(const StringType& seq1, const StringType& seq2,
+                              const WFVector& wfs) const {
+
+    std::vector<std::vector<int>> matrix(seq1.size() + 1, std::vector<int>(seq2.size() + 1, -1));
+
+    std::vector<std::vector<bool>> opt(seq1.size() + 1, std::vector<bool>(seq2.size() + 1, false));
+
+
+    int32_t final_diag = seq1.size() - seq2.size();
+    int32_t final_anti_diag = seq1.size() + seq2.size();
+
+    if (wavefront_reached(wfs[wfs.size() - 1], final_diag, final_anti_diag)) {
+        auto cigar = wavefront_traceback(seq1, seq2, wfs, wfs.size() - 1, final_diag);
+        int i = 0, j = 0;
+        opt[i][j] = true;
+        for (auto& op : cigar) {
+            for (int k = 0; k < op.len; ++k) {
+                if (op.op == 'M' || op.op == 'I') {
+                    ++i;
+                }
+                if (op.op == 'M' || op.op == 'D') {
+                    ++j;
+                }
+                opt[i][j] = true;
+            }
+        }
+    }
+
+    for (int s = 0; s < wfs.size(); ++s) {
+        const auto& wf = wfs[s];
+        for (int k = 0; k < wf.size(); ++k) {
+            int d = wf.diag_begin + k;
+            int a = wf.M[k];
+            if (a < -2) {
+                continue;
+            }
+            int i = (a + d) / 2 - 1;
+            int j = (a - d) / 2 - 1;
+            while (i >= 0 && j >= 0 && i < seq1.size() && j < seq2.size() && seq1[i] == seq2[j]
+                   && a != wf.I[k] && a != wf.D[k]) {
+                matrix[i + 1][j + 1] = s;
+                --i;
+                --j;
+                a -= 2;
+            }
+            matrix[i + 1][j + 1] = s;
+        }
+    }
+
+
+
+    std::cerr << "\t";
+    for (auto c : seq2) {
+        std::cerr << "\t" << c;
+    }
+    std::cerr << std::endl;
+    for (int i = 0; i < seq1.size() + 1; ++i) {
+        if (i != 0) {
+            std::cerr << seq1[i - 1];
+        }
+        for (int j = 0; j < seq2.size() + 1; ++j) {
+            std::cerr << '\t';
+            if (matrix[i][j] >= 0) {
+                std::cerr << matrix[i][j];
+            }
+            else {
+                std::cerr << '.';
+            }
+            if (opt[i][j]) {
+                std::cerr << '*';
+            }
+        }
+        std::cerr << std::endl;
+    }
+}
+
+} // end namespace wfalm
 
 
 #endif /* wfa_lm.hpp */

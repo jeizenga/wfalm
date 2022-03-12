@@ -101,8 +101,9 @@ int main(int argc, char** argv) {
             bool recursive = (mem == 2);
             std::pair<std::vector<wfalm::CIGAROp>, int32_t> res;
             if (recursive && use_st) {
-                // not implemented yet
-                continue;
+                std::cout << "recursive algorithm with suffix tree match:" << std::endl;
+                res = aligner_st.wavefront_align_recursive(seq1.c_str(), seq1.size(),
+                                                           seq2.c_str(), seq2.size());
             }
             else if (recursive) {
                 std::cout << "recursive algorithm:" << std::endl;
@@ -176,8 +177,10 @@ int main(int argc, char** argv) {
     std::cout << "\tx = " << mismatch_sw << std::endl;
     std::cout << "\to = " << gap_open_sw << std::endl;
     std::cout << "\te = " << gap_extend_sw << std::endl;
-    for (bool low_mem : {false, true}) {
+    for (int mem : {0, 1, 2}) {
         for (bool use_st : {false, true}) {
+            bool low_mem = (mem == 1);
+            bool recursive = (mem == 2);
             std::tuple<std::vector<wfalm::CIGAROp>, int32_t, std::pair<size_t, size_t>, std::pair<size_t, size_t>> res;
             if (low_mem && !use_st) {
                 std::cout << "low memory algorithm:" << std::endl;
@@ -195,7 +198,23 @@ int main(int argc, char** argv) {
                                                                   anchor_begin_2, anchor_end_2,
                                                                   false);
             }
-            else if (!low_mem && use_st) {
+            else if (recursive && use_st) {
+                std::cout << "recursive algorithm with suffix tree match:" << std::endl;
+                res = aligner_sw_st.wavefront_align_local_recursive(local_seq1.c_str(), local_seq1.size(),
+                                                                    local_seq2.c_str(), local_seq2.size(),
+                                                                    anchor_begin_1, anchor_end_1,
+                                                                    anchor_begin_2, anchor_end_2,
+                                                                    false);
+            }
+            else if (recursive && !use_st) {
+                std::cout << "recursive algorithm:" << std::endl;
+                res = aligner_sw.wavefront_align_local_recursive(local_seq1.c_str(), local_seq1.size(),
+                                                                 local_seq2.c_str(), local_seq2.size(),
+                                                                 anchor_begin_1, anchor_end_1,
+                                                                 anchor_begin_2, anchor_end_2,
+                                                                 false);
+            }
+            else if (use_st) {
                 std::cout << "standard algorithm with suffix tree match:" << std::endl;
                 res = aligner_sw_st.wavefront_align_local(local_seq1.c_str(), local_seq1.size(),
                                                           local_seq2.c_str(), local_seq2.size(),
