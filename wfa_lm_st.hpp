@@ -36,325 +36,486 @@
 
 namespace wfalm {
 
-
-/// Globally align two sequences using the low-memory WFA algorithm using O(s^3/2) memory.
-/// Also uses a suffix-tree matching function for O(s^2 + M + N) run time.
-///
-/// Args:
-///   seq1         First sequence to be aligned
-///   seq2         Second sequence to be aligned
-///   scores       WFA-style scoring parameters
-///   prune_diff   Optional pruning parameter. If set >= 0, will prune diagonals
-///                that fall behind the furthest reaching diagonal by prune_diff
-///                antidiagionals.
-///
-/// Return value:
-///   Pair consisting of CIGAR string for alignment and the alignment score.
-inline
-std::pair<std::vector<CIGAROp>, int32_t>
-wavefront_align_low_mem_st(const std::string& seq1, const std::string& seq2,
-                           const WFScores& scores, int32_t prune_diff = -1);
-
-/// Globally align two sequences using the low-memory WFA algorithm using O(s^3/2) memory.
-/// Also uses a suffix-tree matching function for O(s^2 + M + N) run time.
-///
-/// Args:
-///   seq1         First sequence to be aligned
-///   seq2         Second sequence to be aligned
-///   scores       Smith-Waterman-Gotoh-style scoring parameters
-///   prune_diff   Optional pruning parameter. If set >= 0, will prune diagonals
-///                that fall behind the furthest reaching diagonal by prune_diff
-///                antidiagionals.
-///
-/// Return value:
-///   Pair consisting of CIGAR string for alignment and the alignment score.
-inline
-std::pair<std::vector<CIGAROp>, int32_t>
-wavefront_align_low_mem_st(const std::string& seq1, const std::string& seq2,
-                           const SWGScores& scores, int32_t prune_diff = -1);
-
-/// Globally align two sequences using the standard WFA algorithm using O(s^2) memory.
-/// Also uses a suffix-tree matching function for O(s^2 + M + N) run time.
-///
-/// Args:
-///   seq1         First sequence to be aligned
-///   seq2         Second sequence to be aligned
-///   scores       WFA-style scoring parameters
-///   prune_diff   Optional pruning parameter. If set >= 0, will prune diagonals
-///                that fall behind the furthest reaching diagonal by prune_diff
-///                antidiagionals.
-///
-/// Return value:
-///   Pair consisting of CIGAR string for alignment and the alignment score.
-inline
-std::pair<std::vector<CIGAROp>, int32_t>
-wavefront_align_st(const std::string& seq1, const std::string& seq2,
-                   const WFScores& scores, int32_t prune_diff = -1);
-
-/// Globally align two sequences using the standard WFA algorithm using O(s^2) memory.
-/// Also uses a suffix-tree matching function for O(s^2 + M + N) run time.
-///
-/// Args:
-///   seq1         First sequence to be aligned
-///   seq2         Second sequence to be aligned
-///   scores       Smith-Waterman-Gotoh-style scoring parameters
-///   prune_diff   Optional pruning parameter. If set >= 0, will prune diagonals
-///                that fall behind the furthest reaching diagonal by prune_diff
-///                antidiagionals.
-///
-/// Return value:
-///   Pair consisting of CIGAR string for alignment and the alignment score.
-inline
-std::pair<std::vector<CIGAROp>, int32_t>
-wavefront_align_st(const std::string& seq1, const std::string& seq2,
-                   const SWGScores& scores, int32_t prune_diff = -1);
-
-
-/// Locally align two sequences from a seed using the low memory WFA as an
-/// alignment engine.
-/// Also uses a suffix-tree matching function for O(s^2 + M + N) run time.
-///
-/// Args:
-///   seq1             First sequence to be aligned
-///   seq2             Second sequence to be aligned
-///   anchor_begin_1   First index of the anchor on seq1
-///   anchor_end_1     Past-the-last index of the anchor on seq1
-///   anchor_begin_2   First index of the anchor on seq2
-///   anchor_end_2     Past-the-last index of the anchor on seq2
-///   scores           Smith-Waterman-Gotoh-style scoring parameters
-///   anchor_is_match  If false, the anchor sequence will be aligned, otherwise
-///                    it will be assumed to be a match
-///
-/// Return value:
-///   A tuple consisting of:
-///     - CIGAR string for alignment
-///     - the alignment score
-///     - a pair of indexes indicating the interval of aligned sequence on seq1
-///     - a pair of indexes indicating the interval of aligned sequence on seq2
-inline
-std::tuple<std::vector<CIGAROp>, int32_t, std::pair<size_t, size_t>, std::pair<size_t, size_t>>
-wavefront_align_local_low_mem_st(const std::string& seq1, const std::string& seq2,
-                                 size_t anchor_begin_1, size_t anchor_end_1,
-                                 size_t anchor_begin_2, size_t anchor_end_2,
-                                 const SWGScores& scores, bool anchor_is_match = true);
-
-/// Locally align two sequences from a seed using the standard WFA as an
-/// alignment engine.
-/// Also uses a suffix-tree matching function for O(s^2 + M + N) run time.
-///
-/// Args:
-///   seq1             First sequence to be aligned
-///   seq2             Second sequence to be aligned
-///   anchor_begin_1   First index of the anchor on seq1
-///   anchor_end_1     Past-the-last index of the anchor on seq1
-///   anchor_begin_2   First index of the anchor on seq2
-///   anchor_end_2     Past-the-last index of the anchor on seq2
-///   scores           Smith-Waterman-Gotoh-style scoring parameters
-///   anchor_is_match  If false, the anchor sequence will be aligned, otherwise
-///                    it will be assumed to be a match
-///
-/// Return value:
-///   A tuple consisting of:
-///     - CIGAR string for alignment
-///     - the alignment score
-///     - a pair of indexes indicating the interval of aligned sequence on seq1
-///     - a pair of indexes indicating the interval of aligned sequence on seq2
-inline
-std::tuple<std::vector<CIGAROp>, int32_t, std::pair<size_t, size_t>, std::pair<size_t, size_t>>
-wavefront_align_local_st(const std::string& seq1, const std::string& seq2,
-                         size_t anchor_begin_1, size_t anchor_end_1,
-                         size_t anchor_begin_2, size_t anchor_end_2,
-                         const SWGScores& scores, bool anchor_is_match = true);
-
-
-
-
-/*******************************************************************
- *******************************************************************
- ***             Only internal functions below here              ***
- *******************************************************************
- *******************************************************************/
-
-
-namespace internal {
-
-// configure the suffix tree we want
-
-typedef sdsl::cst_sada<sdsl::csa_bitcompressed<>,
-                       sdsl::lcp_dac<1>,
-                       sdsl::bp_support_gg<sdsl::nearest_neighbour_dictionary<1>,
-                                           sdsl::rank_support_v<>,
-                                           sdsl::select_support_mcl<>, 64>,
-                       sdsl::rank_support_v<10, 2>,
-                       sdsl::select_support_mcl<10, 2>> SuffixTree;
-
-
-// encoding:
-//  a/A  1
-//  c/C  2
-//  g/G  3
-//  t/T  4
-//  else 5
-//  sep  6
-static constexpr uint8_t separator = 6;
-static constexpr uint8_t st_encode[256] {
-    uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), // 0
-    uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), //
-    uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), // 32
-    uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), //
+/*
+ * Class that performs WFA with the standard, low-memory, or recusive variants.
+ * This class differs from WFAligner in that it uses a longest-common-extension
+ * algorithm based on a suffix tree to compute matches. In most cases, this is
+ * slower than the default comparison-based match computation.
+ */
+class WFAlignerST : public WFAligner {
     
-    uint8_t(5), uint8_t(1), uint8_t(5), uint8_t(2), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(3), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), // 64
-    uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(4), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), //
-    uint8_t(5), uint8_t(1), uint8_t(5), uint8_t(2), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(3), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), // 96
-    uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(4), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), //
+public:
     
-    uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), // 128
-    uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), //
-    uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), // 160
-    uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), //
+    /// Initialize with WFA-style score parameters. On opening an insertion or
+    /// deletion, *both* the gap open and gap extend penalties are applied.
+    /// Scores returned by alignment methods will also be WFA-style.
+    WFAlignerST(uint32_t mismatch, uint32_t gap_open, uint32_t gap_extend);
     
-    uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5),// 192
-    uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5),//
-    uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5),// 224
-    uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5)//
+    /// Initialize with Smith-Waterman-Gotoh-style score parameters. On opening an
+    /// insertion or deletion, *both* the gap open and gap extend penalties are applied.
+    /// Scores returned by alignment methods will also be Smith-Waterman-Gotoh-style.
+    WFAlignerST(uint32_t match, uint32_t mismatch, uint32_t gap_open, uint32_t gap_extend);
+    
+    /// Default constructor. Performs edit distance alignment.
+    WFAlignerST();
+    
+    /*****************************
+     *  Configurable parameters  *
+     *****************************/
+    
+    /// If set to a number >= 0, prunes diagonals that fall this many anti-diagonals
+    /// behind the furthest-reaching diagonal. This can lead to suboptimal alignments,
+    /// but it also can increase speed and reduce memory use. If set to a number < 0,
+    /// no pruning is performed.
+    using WFAligner::lagging_diagonal_prune;
+    
+    /***********************
+     *  Alignment methods  *
+     ***********************/
+    
+    /// Globally align two sequences using the fastest algorithm that will remain
+    /// constrained to a given maximum memory, using a suffix tree to compute matches
+    ///
+    /// Args:
+    ///   seq1         First sequence to be aligned (need not be null-terminated)
+    ///   len1         Length of first sequence to be aligned
+    ///   seq2         Second sequence to be aligned (need not be null-terminated)
+    ///   len2         Length of second sequence to be aligned
+    ///   target_mem   The target maximum memory use in bytes
+    ///
+    /// Return value:
+    ///   Pair consisting of CIGAR string for alignment and the alignment score.
+    inline std::pair<std::vector<CIGAROp>, int32_t>
+    wavefront_align_adaptive(const char* seq1, size_t len1,
+                             const char* seq2, size_t len2,
+                             uint64_t max_mem) const;
+    
+    
+    /// Globally align two sequences in O(s log s) memory using the recursive WFA algorithm,
+    /// using a suffix tree to compute matches.
+    ///
+    /// Args:
+    ///   seq1         First sequence to be aligned (need not be null-terminated)
+    ///   len1         Length of first sequence to be aligned
+    ///   seq2         Second sequence to be aligned (need not be null-terminated)
+    ///   len2         Length of second sequence to be aligned
+    ///
+    /// Return value:
+    ///   Pair consisting of CIGAR string for alignment and the alignment score.
+    inline std::pair<std::vector<CIGAROp>, int32_t>
+    wavefront_align_recursive(const char* seq1, size_t len1,
+                              const char* seq2, size_t len2) const;
+    
+    /// Globally align two sequences in O(s^3/2) memory using the low-memory WFA algorithm,
+    /// using a suffix tree to compute matches.
+    ///
+    /// Args:
+    ///   seq1         First sequence to be aligned (need not be null-terminated)
+    ///   len1         Length of first sequence to be aligned
+    ///   seq2         Second sequence to be aligned (need not be null-terminated)
+    ///   len2         Length of second sequence to be aligned
+    ///
+    /// Return value:
+    ///   Pair consisting of CIGAR string for alignment and the alignment score.
+    inline std::pair<std::vector<CIGAROp>, int32_t>
+    wavefront_align_low_mem(const char* seq1, size_t len1,
+                            const char* seq2, size_t len2) const;
+    
+    /// Globally align two sequences in O(s^2) memory using the standard WFA algorithm,
+    /// using a suffix tree to compute matches.
+    ///
+    /// Args:
+    ///   seq1         First sequence to be aligned (need not be null-terminated)
+    ///   len1         Length of first sequence to be aligned
+    ///   seq2         Second sequence to be aligned (need not be null-terminated)
+    ///   len2         Length of second sequence to be aligned
+    ///
+    /// Return value:
+    ///   Pair consisting of CIGAR string for alignment and the alignment score.
+    inline std::pair<std::vector<CIGAROp>, int32_t>
+    wavefront_align(const char* seq1, size_t len1,
+                    const char* seq2, size_t len2) const;
+    
+    /// Locally align two sequences from a seed using the adaptive WFA as an
+    /// alignment engine. *Can only called if WFAligner was initialized with
+    /// Smith-Waterman-Gotoh scoring parameters in the constructor.*
+    ///
+    /// Args:
+    ///   seq1             First sequence to be aligned (need not be null-terminated)
+    ///   len1             Length of first sequence to be aligned
+    ///   seq2             Second sequence to be aligned (need not be null-terminated)
+    ///   len2             Length of second sequence to be aligned
+    ///   max_mem          The target maximum memory use in bytes
+    ///   anchor_begin_1   First index of the anchor on seq1
+    ///   anchor_end_1     Past-the-last index of the anchor on seq1
+    ///   anchor_begin_2   First index of the anchor on seq2
+    ///   anchor_end_2     Past-the-last index of the anchor on seq2
+    ///   anchor_is_match  If false, the anchor sequence will be aligned, otherwise
+    ///                    it will be assumed to be a match
+    ///
+    /// Return value:
+    ///   A tuple consisting of:
+    ///     - CIGAR string for alignment
+    ///     - the alignment score
+    ///     - a pair of indexes indicating the interval of aligned sequence on seq1
+    ///     - a pair of indexes indicating the interval of aligned sequence on seq2
+    inline std::tuple<std::vector<CIGAROp>, int32_t, std::pair<size_t, size_t>, std::pair<size_t, size_t>>
+    wavefront_align_local_recursive(const char* seq1, size_t len1,
+                                    const char* seq2, size_t len2,
+                                    uint64_t max_mem,
+                                    size_t anchor_begin_1, size_t anchor_end_1,
+                                    size_t anchor_begin_2, size_t anchor_end_2,
+                                    bool anchor_is_match = true) const;
+    
+    /// Locally align two sequences from a seed using the recursive WFA as an
+    /// alignment engine. *Can only called if WFAligner was initialized with
+    /// Smith-Waterman-Gotoh scoring parameters in the constructor.*
+    ///
+    /// Args:
+    ///   seq1             First sequence to be aligned (need not be null-terminated)
+    ///   len1             Length of first sequence to be aligned
+    ///   seq2             Second sequence to be aligned (need not be null-terminated)
+    ///   len2             Length of second sequence to be aligned
+    ///   anchor_begin_1   First index of the anchor on seq1
+    ///   anchor_end_1     Past-the-last index of the anchor on seq1
+    ///   anchor_begin_2   First index of the anchor on seq2
+    ///   anchor_end_2     Past-the-last index of the anchor on seq2
+    ///   anchor_is_match  If false, the anchor sequence will be aligned, otherwise
+    ///                    it will be assumed to be a match
+    ///
+    /// Return value:
+    ///   A tuple consisting of:
+    ///     - CIGAR string for alignment
+    ///     - the alignment score
+    ///     - a pair of indexes indicating the interval of aligned sequence on seq1
+    ///     - a pair of indexes indicating the interval of aligned sequence on seq2
+    inline std::tuple<std::vector<CIGAROp>, int32_t, std::pair<size_t, size_t>, std::pair<size_t, size_t>>
+    wavefront_align_local_recursive(const char* seq1, size_t len1,
+                                    const char* seq2, size_t len2,
+                                    size_t anchor_begin_1, size_t anchor_end_1,
+                                    size_t anchor_begin_2, size_t anchor_end_2,
+                                    bool anchor_is_match = true) const;
+    
+    /// Locally align two sequences from a seed using the low memory WFA as an
+    /// alignment engine. *Can only called if WFAligner was initialized with
+    /// Smith-Waterman-Gotoh scoring parameters in the constructor.*
+    ///
+    /// Args:
+    ///   seq1             First sequence to be aligned (need not be null-terminated)
+    ///   len1             Length of first sequence to be aligned
+    ///   seq2             Second sequence to be aligned (need not be null-terminated)
+    ///   len2             Length of second sequence to be aligned
+    ///   anchor_begin_1   First index of the anchor on seq1
+    ///   anchor_end_1     Past-the-last index of the anchor on seq1
+    ///   anchor_begin_2   First index of the anchor on seq2
+    ///   anchor_end_2     Past-the-last index of the anchor on seq2
+    ///   anchor_is_match  If false, the anchor sequence will be aligned, otherwise
+    ///                    it will be assumed to be a match
+    ///
+    /// Return value:
+    ///   A tuple consisting of:
+    ///     - CIGAR string for alignment
+    ///     - the alignment score
+    ///     - a pair of indexes indicating the interval of aligned sequence on seq1
+    ///     - a pair of indexes indicating the interval of aligned sequence on seq2
+    inline std::tuple<std::vector<CIGAROp>, int32_t, std::pair<size_t, size_t>, std::pair<size_t, size_t>>
+    wavefront_align_local_low_mem(const char* seq1, size_t len1,
+                                  const char* seq2, size_t len2,
+                                  size_t anchor_begin_1, size_t anchor_end_1,
+                                  size_t anchor_begin_2, size_t anchor_end_2,
+                                  bool anchor_is_match = true) const;
+    
+    /// Locally align two sequences from a seed using the standard WFA as an
+    /// alignment engine. *Can only called if WFAligner was initialized with
+    /// Smith-Waterman-Gotoh scoring parameters in the constructor.*
+    ///
+    /// Args:
+    ///   seq1             First sequence to be aligned (need not be null-terminated)
+    ///   len1             Length of first sequence to be aligned
+    ///   seq2             Second sequence to be aligned (need not be null-terminated)
+    ///   len2             Length of second sequence to be aligned
+    ///   anchor_begin_1   First index of the anchor on seq1
+    ///   anchor_end_1     Past-the-last index of the anchor on seq1
+    ///   anchor_begin_2   First index of the anchor on seq2
+    ///   anchor_end_2     Past-the-last index of the anchor on seq2
+    ///   anchor_is_match  If false, the anchor sequence will be aligned, otherwise
+    ///                    it will be assumed to be a match
+    ///
+    /// Return value:
+    ///   A tuple consisting of:
+    ///     - CIGAR string for alignment
+    ///     - the alignment score
+    ///     - a pair of indexes indicating the interval of aligned sequence on seq1
+    ///     - a pair of indexes indicating the interval of aligned sequence on seq2
+    inline std::tuple<std::vector<CIGAROp>, int32_t, std::pair<size_t, size_t>, std::pair<size_t, size_t>>
+    wavefront_align_local(const char* seq1, size_t len1,
+                          const char* seq2, size_t len2,
+                          size_t anchor_begin_1, size_t anchor_end_1,
+                          size_t anchor_begin_2, size_t anchor_end_2,
+                          bool anchor_is_match = true) const;
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    /*******************************************************************
+     *******************************************************************
+     ***             Only internal functions below here              ***
+     *******************************************************************
+     *******************************************************************/
+    
+    
+    
+    
+    
+    
+    
+    
+    
+private:
+    
+    // configure the suffix tree we want
+    
+    typedef sdsl::cst_sada<sdsl::csa_bitcompressed<>,
+                           sdsl::lcp_dac<1>,
+                           sdsl::bp_support_gg<sdsl::nearest_neighbour_dictionary<1>,
+                                               sdsl::rank_support_v<>,
+                                               sdsl::select_support_mcl<>, 64>,
+                           sdsl::rank_support_v<10, 2>,
+                           sdsl::select_support_mcl<10, 2>> SuffixTree;
+    
+    // a match computing function based on the suffix tree
+    template<typename StringType>
+    struct STMatchFunc {
+        
+        STMatchFunc(const StringType& seq1, const StringType& seq2) : offset(seq1.size() + 1) {
+            
+            // encoding:
+            //  a/A  1
+            //  c/C  2
+            //  g/G  3
+            //  t/T  4
+            //  else 5
+            //  $    6
+            static const uint8_t separator = 6;
+            static const uint8_t st_encode[256] {
+                uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5),
+                uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), // 0
+                uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5),
+                uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), //
+                uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5),
+                uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), // 32
+                uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5),
+                uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), //
+                
+                uint8_t(5), uint8_t(1), uint8_t(5), uint8_t(2), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(3),
+                uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), // 64
+                uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(4), uint8_t(5), uint8_t(5), uint8_t(5),
+                uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), //
+                uint8_t(5), uint8_t(1), uint8_t(5), uint8_t(2), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(3),
+                uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), // 96
+                uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(4), uint8_t(5), uint8_t(5), uint8_t(5),
+                uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), //
+                
+                uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5),
+                uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), // 128
+                uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5),
+                uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), //
+                uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5),
+                uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), // 160
+                uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5),
+                uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), //
+                
+                uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5),
+                uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), // 192
+                uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5),
+                uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), //
+                uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5),
+                uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), // 224
+                uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5),
+                uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5), uint8_t(5)  //
+            };
+            
+            // TODO: i wish this were possible with an implicit copy, but looks like probably not
+            // since the sdsl::store_to_file that backends the in-memory construction is only
+            // specialized for string and char*
+            //  - but also this gets us around the StringView vs. string issues in local alignment...
+            
+            // encode the joined string and the sentinel in a 3-bit alphabet
+            std::string combined_seq(seq1.size() + seq2.size() + 1, 0);
+            size_t i;
+            for (i = 0; i < seq1.size(); ++i) {
+                combined_seq[i] = st_encode[seq1[i]];
+            }
+            combined_seq[i] = separator;
+            ++i;
+            for (size_t j = 0; j < seq2.size(); ++i, ++j) {
+                combined_seq[i] = st_encode[seq2[j]];
+            }
+            
+            // construct in memory with 1-byte words
+            sdsl::construct_im(suffix_tree, combined_seq, 1);
+        }
+        
+        inline size_t operator()(size_t i, size_t j) const {
+            // in sdsl, suffix array indexes are 0-based, but leaf ranks are 1-based
+            return suffix_tree.depth(suffix_tree.lca(suffix_tree.select_leaf(suffix_tree.csa.isa[i] + 1),
+                                                     suffix_tree.select_leaf(suffix_tree.csa.isa[offset + j] + 1)));
+        }
+        
+        SuffixTree suffix_tree;
+        size_t offset;
+    };
+    
+    // give the wrapper access to the dispatch function
+    friend class StandardGlobalWFA<STMatchFunc<StringView>, StringView>;
+    friend class StandardSemilocalWFA<STMatchFunc<RevStringView>, RevStringView>;
+    friend class LowMemGlobalWFA<STMatchFunc<StringView>, StringView>;
+    friend class LowMemSemilocalWFA<STMatchFunc<RevStringView>, RevStringView>;
+    friend class RecursiveGlobalWFA<STMatchFunc<StringView>, StringView>;
+    friend class RecursiveSemilocalWFA<STMatchFunc<RevStringView>, RevStringView>;
+    friend class AdaptiveGlobalWFA<STMatchFunc<StringView>, StringView>;
+    friend class AdaptiveSemilocalWFA<STMatchFunc<RevStringView>, RevStringView>;
+    
 };
 
-template<typename StringType>
-struct STMatchFunc {
-    
-    STMatchFunc(const StringType& seq1, const StringType& seq2) : offset(seq1.size() + 1) {
-        
-        // TODO: i wish this were possible with an implicit copy, but looks like probably not
-        // since the sdsl::store_to_file that backends the in-memory construction is only
-        // specialized for string and char*
-        //  - but also this gets us around the StringView vs. string issues in local alignment...
-        
-        // encode the joined string and the sentinel in a 3-bit alphabet
-        std::string combined_seq(seq1.size() + seq2.size() + 1, 0);
-        size_t i;
-        for (i = 0; i < seq1.size(); ++i) {
-            combined_seq[i] = st_encode[seq1[i]];
-        }
-        combined_seq[i] = separator;
-        ++i;
-        for (size_t j = 0; j < seq2.size(); ++i, ++j) {
-            combined_seq[i] = st_encode[seq2[j]];
-        }
-        
-        // construct in memory with 1-byte words
-        sdsl::construct_im(suffix_tree, combined_seq, 1);
-    }
-    
-    inline size_t operator()(size_t i, size_t j) const {
-        // in sdsl, suffix array indexes are 0-based, but leaf ranks are 1-based
-        return suffix_tree.depth(suffix_tree.lca(suffix_tree.select_leaf(suffix_tree.csa.isa[i] + 1),
-                                                 suffix_tree.select_leaf(suffix_tree.csa.isa[offset + j] + 1)));
-    }
-    
-    SuffixTree suffix_tree;
-    size_t offset;
-};
+WFAlignerST::WFAlignerST() : WFAligner() {}
 
-} // end namespace internal
+WFAlignerST::WFAlignerST(uint32_t mismatch, uint32_t gap_open, uint32_t gap_extend)
+    : WFAligner(mismatch, gap_open, gap_extend)
+{
+    // only need to delegate to WFAligner
+}
 
-// TODO: would be nice to do this with less duplication from the other header...
+WFAlignerST::WFAlignerST(uint32_t match, uint32_t mismatch, uint32_t gap_open, uint32_t gap_extend)
+    : WFAligner(match, mismatch, gap_open, gap_extend)
+{
+    // only need to delegate to WFAligner
+}
 
-
-inline
-std::pair<std::vector<CIGAROp>, int32_t>
-wavefront_align_st(const std::string& seq1, const std::string& seq2,
-                   const WFScores& scores, int32_t prune_diff) {
-    typedef internal::STMatchFunc<std::string> MFunc;
-    return internal::wavefront_dispatch<false, false, MFunc>(seq1, seq2,
-                                                             scores, prune_diff, 0);
+inline std::pair<std::vector<CIGAROp>, int32_t>
+WFAlignerST::wavefront_align(const char* seq1, size_t len1,
+                             const char* seq2, size_t len2) const {
+    StringView str1(seq1, 0, len1);
+    StringView str2(seq2, 0, len2);
+    return wavefront_dispatch<false, StdMem, STMatchFunc<StringView>>(str1, str2,
+                                                                      std::numeric_limits<uint64_t>::max());
 }
 
 
-inline
-std::pair<std::vector<CIGAROp>, int32_t>
-wavefront_align_low_mem_st(const std::string& seq1, const std::string& seq2,
-                           const WFScores& scores, int32_t prune_diff) {
-    typedef internal::STMatchFunc<std::string> MFunc;
-    return internal::wavefront_dispatch<false, true, MFunc>(seq1, seq2,
-                                                            scores, prune_diff, 0);
+inline std::pair<std::vector<CIGAROp>, int32_t>
+WFAlignerST::wavefront_align_low_mem(const char* seq1, size_t len1,
+                                   const char* seq2, size_t len2) const {
+    StringView str1(seq1, 0, len1);
+    StringView str2(seq2, 0, len2);
+    return wavefront_dispatch<false, LowMem, STMatchFunc<StringView>>(str1, str2,
+                                                                      std::numeric_limits<uint64_t>::max());
 }
 
 
-inline
-std::pair<std::vector<CIGAROp>, int32_t>
-wavefront_align_st(const std::string& seq1, const std::string& seq2,
-                   const SWGScores& scores, int32_t prune_diff) {
-    
-    // make WFA params
-    WFScores wf_scores = internal::convert_score_params(scores);
-    
-    // do the alignment
-    typedef internal::STMatchFunc<std::string> MFunc;
-    auto result = internal::wavefront_dispatch<false, false, MFunc>(seq1, seq2,
-                                                                    wf_scores, prune_diff, 0);
-    
-    // convert the score back to SWG params
-    result.second = internal::convert_score(scores, seq1.size(), seq2.size(), result.second);
-    return result;
+inline std::pair<std::vector<CIGAROp>, int32_t>
+WFAlignerST::wavefront_align_recursive(const char* seq1, size_t len1,
+                                     const char* seq2, size_t len2) const {
+    StringView str1(seq1, 0, len1);
+    StringView str2(seq2, 0, len2);
+    return wavefront_dispatch<false, Recursive, STMatchFunc<StringView>>(str1, str2,
+                                                                         std::numeric_limits<uint64_t>::max());
 }
 
-/// Same as above except with Smith-Waterman-Gotoh style scoring parameter
-inline
-std::pair<std::vector<CIGAROp>, int32_t>
-wavefront_align_low_mem_st(const std::string& seq1, const std::string& seq2,
-                           const SWGScores& scores, int32_t prune_diff) {
-    
-    // make WFA params
-    WFScores wf_scores = internal::convert_score_params(scores);
-    
-    // do the alignment
-    typedef internal::STMatchFunc<std::string> MFunc;
-    auto result = internal::wavefront_dispatch<false, true, MFunc>(seq1, seq2,
-                                                                   wf_scores, prune_diff, 0);
-    
-    // convert the score back to SWG params
-    result.second = internal::convert_score(scores, seq1.size(), seq2.size(), result.second);
-    return result;
-    
+
+
+inline std::pair<std::vector<CIGAROp>, int32_t>
+WFAlignerST::wavefront_align_adaptive(const char* seq1, size_t len1,
+                                      const char* seq2, size_t len2,
+                                      uint64_t max_mem) const {
+    StringView str1(seq1, 0, len1);
+    StringView str2(seq2, 0, len2);
+    return wavefront_dispatch<false, AdaptiveMem, STMatchFunc<StringView>>(str1, str2, max_mem);
 }
 
-inline
-std::tuple<std::vector<CIGAROp>, int32_t, std::pair<size_t, size_t>, std::pair<size_t, size_t>>
-wavefront_align_local_st(const std::string& seq1, const std::string& seq2,
-                         size_t anchor_begin_1, size_t anchor_end_1,
-                         size_t anchor_begin_2, size_t anchor_end_2,
-                         const SWGScores& scores, bool anchor_is_match) {
-    
-    // configure the alignment and match functions
-    typedef internal::StandardSemilocalWFA<internal::STMatchFunc<internal::RevStringView>, internal::RevStringView> PrefWFA;
-    typedef internal::StandardGlobalWFA<internal::STMatchFunc<internal::StringView>, internal::StringView> AnchorWFA;
-    typedef internal::StandardSemilocalWFA<internal::STMatchFunc<internal::StringView>, internal::StringView> SuffWFA;
-    
-    return internal::wavefront_align_local_core<PrefWFA, AnchorWFA, SuffWFA>(seq1, seq2,
-                                                                             anchor_begin_1, anchor_end_1,
-                                                                             anchor_begin_2, anchor_end_2,
-                                                                             scores, anchor_is_match);
-}
-
-inline
-std::tuple<std::vector<CIGAROp>, int32_t, std::pair<size_t, size_t>, std::pair<size_t, size_t>>
-wavefront_align_local_low_mem_st(const std::string& seq1, const std::string& seq2,
+inline std::tuple<std::vector<CIGAROp>, int32_t, std::pair<size_t, size_t>, std::pair<size_t, size_t>>
+WFAlignerST::wavefront_align_local(const char* seq1, size_t len1,
+                                 const char* seq2, size_t len2,
                                  size_t anchor_begin_1, size_t anchor_end_1,
                                  size_t anchor_begin_2, size_t anchor_end_2,
-                                 const SWGScores& scores, bool anchor_is_match) {
+                                 bool anchor_is_match) const {
     
     // configure the alignment and match functions
-    typedef internal::LowMemSemilocalWFA<internal::STMatchFunc<internal::RevStringView>, internal::RevStringView> PrefWFA;
-    typedef internal::LowMemGlobalWFA<internal::STMatchFunc<internal::StringView>, internal::StringView> AnchorWFA;
-    typedef internal::LowMemSemilocalWFA<internal::STMatchFunc<internal::StringView>, internal::StringView> SuffWFA;
+    typedef StandardSemilocalWFA<STMatchFunc<RevStringView>, RevStringView> PrefWFA;
+    typedef StandardGlobalWFA<STMatchFunc<StringView>, StringView> AnchorWFA;
+    typedef StandardSemilocalWFA<STMatchFunc<StringView>, StringView> SuffWFA;
     
-    return internal::wavefront_align_local_core<PrefWFA, AnchorWFA, SuffWFA>(seq1, seq2,
-                                                                             anchor_begin_1, anchor_end_1,
-                                                                             anchor_begin_2, anchor_end_2,
-                                                                             scores, anchor_is_match);
+    return wavefront_align_local_core<PrefWFA, AnchorWFA, SuffWFA>(seq1, len1, seq2, len2,
+                                                                   std::numeric_limits<uint64_t>::max(),
+                                                                   anchor_begin_1, anchor_end_1,
+                                                                   anchor_begin_2, anchor_end_2,
+                                                                   anchor_is_match);
 }
 
+inline std::tuple<std::vector<CIGAROp>, int32_t, std::pair<size_t, size_t>, std::pair<size_t, size_t>>
+WFAlignerST::wavefront_align_local_low_mem(const char* seq1, size_t len1,
+                                         const char* seq2, size_t len2,
+                                         size_t anchor_begin_1, size_t anchor_end_1,
+                                         size_t anchor_begin_2, size_t anchor_end_2,
+                                         bool anchor_is_match) const {
+    
+    // configure the alignment and match functions
+    typedef LowMemSemilocalWFA<STMatchFunc<RevStringView>, RevStringView> PrefWFA;
+    typedef LowMemGlobalWFA<STMatchFunc<StringView>, StringView> AnchorWFA;
+    typedef LowMemSemilocalWFA<STMatchFunc<StringView>, StringView> SuffWFA;
+    
+    return wavefront_align_local_core<PrefWFA, AnchorWFA, SuffWFA>(seq1, len1, seq2, len2,
+                                                                   std::numeric_limits<uint64_t>::max(),
+                                                                   anchor_begin_1, anchor_end_1,
+                                                                   anchor_begin_2, anchor_end_2,
+                                                                   anchor_is_match);
 }
+
+inline std::tuple<std::vector<CIGAROp>, int32_t, std::pair<size_t, size_t>, std::pair<size_t, size_t>>
+WFAlignerST::wavefront_align_local_recursive(const char* seq1, size_t len1,
+                                             const char* seq2, size_t len2,
+                                             size_t anchor_begin_1, size_t anchor_end_1,
+                                             size_t anchor_begin_2, size_t anchor_end_2,
+                                             bool anchor_is_match) const {
+    
+    // configure the alignment and match functions
+    typedef RecursiveSemilocalWFA<STMatchFunc<RevStringView>, RevStringView> PrefWFA;
+    typedef RecursiveGlobalWFA<STMatchFunc<StringView>, StringView> AnchorWFA;
+    typedef RecursiveSemilocalWFA<STMatchFunc<StringView>, StringView> SuffWFA;
+    
+    return wavefront_align_local_core<PrefWFA, AnchorWFA, SuffWFA>(seq1, len1, seq2, len2,
+                                                                   std::numeric_limits<uint64_t>::max(),
+                                                                   anchor_begin_1, anchor_end_1,
+                                                                   anchor_begin_2, anchor_end_2,
+                                                                   anchor_is_match);
+
+}
+
+inline std::tuple<std::vector<CIGAROp>, int32_t, std::pair<size_t, size_t>, std::pair<size_t, size_t>>
+WFAlignerST::wavefront_align_local_recursive(const char* seq1, size_t len1,
+                                             const char* seq2, size_t len2,
+                                             uint64_t max_mem,
+                                             size_t anchor_begin_1, size_t anchor_end_1,
+                                             size_t anchor_begin_2, size_t anchor_end_2,
+                                             bool anchor_is_match) const {
+    
+    // configure the alignment and match functions
+    typedef RecursiveSemilocalWFA<STMatchFunc<RevStringView>, RevStringView> PrefWFA;
+    typedef RecursiveGlobalWFA<STMatchFunc<StringView>, StringView> AnchorWFA;
+    typedef RecursiveSemilocalWFA<STMatchFunc<StringView>, StringView> SuffWFA;
+    
+    return wavefront_align_local_core<PrefWFA, AnchorWFA, SuffWFA>(seq1, len1, seq2, len2, max_mem,
+                                                                   anchor_begin_1, anchor_end_1,
+                                                                   anchor_begin_2, anchor_end_2,
+                                                                   anchor_is_match);
+    
+}
+
+} // end namespace wfalm
 
 
 #endif /* wfa_lm_st.hpp */
