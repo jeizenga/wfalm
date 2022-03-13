@@ -49,7 +49,10 @@ void print_usage() {
     cerr << endl;
     cerr << "options:" << endl;
     cerr << " -s, --standard-mem    O(s^2) memory algorithm [default]" << endl;
-    cerr << " -m, --low-mem         O(s^3/2) memory algrorithm" << endl;
+    cerr << " -m, --low-mem         O(s^3/2) memory algorithm" << endl;
+    cerr << " -r, --recursive       O(s log s) memory algorithm" << endl;
+    cerr << " -d, --adaptive        dynamically choose between -s, -m, and -r" << endl;
+    cerr << " -M, --max-mem INT     target max memory use for adaptive algorithm" << endl;
     cerr << " -g, --global          global alignment [default]" << endl;
     cerr << " -l, --local SEED      local alignment, requires seed of format i:j,k:l" << endl;
     cerr << " -c, --compare-match   compute matches by direct comparison, O(sN) time [default]" << endl;
@@ -161,12 +164,17 @@ int main(int argc, char **argv) {
     bool local = false;
     bool compare_match = true;
     bool low_memory = false;
+    bool recursive = false;
+    bool adaptive = false;
+    uint64_t max_mem = std::numeric_limits<uint64_t>::max();
     
     int c;
     while (true){
         static struct option long_options[] =
         {
             {"standard-mem", no_argument, 0, 's'},
+            {"adaptive", no_argument, 0, 'd'},
+            {"recursive", no_argument, 0, 'r'},
             {"low-mem", no_argument, 0, 'm'},
             {"global", no_argument, 0, 'g'},
             {"local", required_argument, 0, 'l'},
@@ -176,12 +184,13 @@ int main(int argc, char **argv) {
             {"gap-open", required_argument, 0, 'o'},
             {"gap-extend", required_argument, 0, 'e'},
             {"match", required_argument, 0, 'a'},
+            {"max-mem", required_argument, 0, 'M'},
             {"help", no_argument, 0, 'h'},
             {0,0,0,0}
         };
         
         int option_index = 0;
-        c = getopt_long (argc, argv, "smgl:ctx:o:e:a:h",
+        c = getopt_long (argc, argv, "smrdgl:ctx:o:e:a:M:h",
                          long_options, &option_index);
         if (c == -1){
             break;
@@ -190,9 +199,17 @@ int main(int argc, char **argv) {
         switch(c){
             case 's':
                 low_memory = false;
+                recursive = false;
+                adaptive = false;
                 break;
             case 'm':
                 low_memory = true;
+                break;
+            case 'd':
+                adaptive = true;
+                break;
+            case 'r':
+                recursive = true;
                 break;
             case 'g':
                 local = false;
@@ -219,6 +236,9 @@ int main(int argc, char **argv) {
             case 'a':
                 match = atoi(optarg);
                 break;
+            case 'M':
+                max_mem = atoi(optarg);
+                break;
             case 'h':
             case '?':
                 print_usage();
@@ -244,6 +264,10 @@ int main(int argc, char **argv) {
         cerr << "ERROR: must use Smith-Waterman-Gotoh style parameters in local alignment" << endl;
         return 1;
     }
+    if (recursive + adaptive + low_memory > 1) {
+        cerr << "ERROR: must select at most 1 memory use option" << endl;
+        return 1;
+    }
     
     string fasta1(argv[optind++]);
     string fasta2(argv[optind++]);
@@ -253,7 +277,7 @@ int main(int argc, char **argv) {
     cerr << fasta1 << endl;
     cerr << fasta2 << endl;
     
-    cerr << "MEMORY: " << (low_memory ? "low" : "standard") << endl;
+    cerr << "MEMORY: " << (low_memory ? "low" : (recursive ? "recursive" : (adaptive ? "adaptive" : "standard"))) << endl;
     cerr << "MATCH: " << (compare_match ? "direct" : "suffix tree") << endl;
     cerr << "ALIGNMENT: " << (local ? "local" : "global") << endl;
     cerr << "PARAMS: ";
@@ -274,14 +298,22 @@ int main(int argc, char **argv) {
     auto parse_time = duration_cast<microseconds>(end_parse - begin_parse);
     cerr << "PARSE TIME: " << parse_time.count() << " us" << endl;
     cerr << "BASELINE MEM: " << max_memory_usage() << " KB" << endl;
+
+    WFAligner aligner;
+    WFAlignerST aligner_st;
+    if (match == 0) {
+        aligner = WFAligner(mismatch, gap_open, gap_extend);
+        aligner_st = WFAlignerST(mismatch, gap_open, gap_extend);
+    }
+    else {
+        aligner = WFAligner(match, mismatch, gap_open, gap_extend);
+        aligner_st = WFAlignerST(match, mismatch, gap_open, gap_extend);
+    }
     
     cerr << "[progress] aligning sequences '" << seqname1 << "' (length " << seq1.size() << ") and '" << seqname2 << "' (length " << seq2.size() << "):" << endl;
     cerr << shortened_seq(seq1, 50) << endl;
     cerr << shortened_seq(seq2, 50) << endl;
     
-    
-    WFScores wf_scores(mismatch, gap_open, gap_extend);
-    SWGScores swg_scores(match, mismatch, gap_open, gap_extend);
     
     vector<CIGAROp> cigar;
     int32_t score;
@@ -290,49 +322,62 @@ int main(int argc, char **argv) {
     
     steady_clock::time_point begin_align = steady_clock::now();
     
-    if (!low_memory && !local && compare_match) {
-        if (match == 0) {
-            tie(cigar, score) = wavefront_align(seq1, seq2, wf_scores);
-        }
-        else {
-            tie(cigar, score) = wavefront_align(seq1, seq2, swg_scores);
-        }
-    }
-    else if (low_memory && !local && compare_match) {
-        if (match == 0) {
-            tie(cigar, score) = wavefront_align_low_mem(seq1, seq2, wf_scores);
-        }
-        else {
-            tie(cigar, score) = wavefront_align_low_mem(seq1, seq2, swg_scores);
-        }
-    }
-    else if (!low_memory && !local && !compare_match) {
-        if (match == 0) {
-            tie(cigar, score) = wavefront_align_st(seq1, seq2, wf_scores);
-        }
-        else {
-            tie(cigar, score) = wavefront_align_st(seq1, seq2, swg_scores);
-        }
+    
+    if (low_memory && !local && compare_match) {
+        tie(cigar, score) = aligner.wavefront_align_low_mem(seq1.c_str(), seq1.size(), seq2.c_str(), seq2.size());
     }
     else if (low_memory && !local && !compare_match) {
-        if (match == 0) {
-            tie(cigar, score) = wavefront_align_low_mem_st(seq1, seq2, wf_scores);
-        }
-        else {
-            tie(cigar, score) = wavefront_align_low_mem_st(seq1, seq2, swg_scores);
-        }
-    }
-    else if (!low_memory && local && compare_match) {
-        tie(cigar, score, range1, range2) = wavefront_align_local(seq1, seq2, anchor11, anchor12, anchor21, anchor22, swg_scores);
+        tie(cigar, score) = aligner_st.wavefront_align_low_mem(seq1.c_str(), seq1.size(), seq2.c_str(), seq2.size());
     }
     else if (low_memory && local && compare_match) {
-        tie(cigar, score, range1, range2) = wavefront_align_local_low_mem(seq1, seq2, anchor11, anchor12, anchor21, anchor22, swg_scores);
-    }
-    else if (!low_memory && local && !compare_match) {
-        tie(cigar, score, range1, range2) = wavefront_align_local_st(seq1, seq2, anchor11, anchor12, anchor21, anchor22, swg_scores);
+        tie(cigar, score, range1, range2) = aligner.wavefront_align_local_low_mem(seq1.c_str(), seq1.size(), seq2.c_str(), seq2.size(),
+                                                                                  anchor11, anchor12, anchor21, anchor22);
     }
     else if (low_memory && local && !compare_match) {
-        tie(cigar, score, range1, range2) = wavefront_align_local_low_mem_st(seq1, seq2, anchor11, anchor12, anchor21, anchor22, swg_scores);
+        tie(cigar, score, range1, range2) = aligner_st.wavefront_align_local_low_mem(seq1.c_str(), seq1.size(), seq2.c_str(), seq2.size(),
+                                                                                     anchor11, anchor12, anchor21, anchor22);
+    }
+    else if (recursive && !local && compare_match) {
+        tie(cigar, score) = aligner.wavefront_align_recursive(seq1.c_str(), seq1.size(), seq2.c_str(), seq2.size());
+    }
+    else if (recursive && !local && !compare_match) {
+        tie(cigar, score) = aligner_st.wavefront_align_recursive(seq1.c_str(), seq1.size(), seq2.c_str(), seq2.size());
+    }
+    else if (recursive && local && compare_match) {
+        tie(cigar, score, range1, range2) = aligner.wavefront_align_local_recursive(seq1.c_str(), seq1.size(), seq2.c_str(), seq2.size(),
+                                                                                  anchor11, anchor12, anchor21, anchor22);
+    }
+    else if (recursive && local && !compare_match) {
+        tie(cigar, score, range1, range2) = aligner_st.wavefront_align_local_recursive(seq1.c_str(), seq1.size(), seq2.c_str(), seq2.size(),
+                                                                                     anchor11, anchor12, anchor21, anchor22);
+    }
+    else if (adaptive && !local && compare_match) {
+        tie(cigar, score) = aligner.wavefront_align_adaptive(seq1.c_str(), seq1.size(), seq2.c_str(), seq2.size(), max_mem);
+    }
+    else if (adaptive && !local && !compare_match) {
+        tie(cigar, score) = aligner_st.wavefront_align_adaptive(seq1.c_str(), seq1.size(), seq2.c_str(), seq2.size(), max_mem);
+    }
+    else if (adaptive && local && compare_match) {
+        tie(cigar, score, range1, range2) = aligner.wavefront_align_local_adaptive(seq1.c_str(), seq1.size(), seq2.c_str(), seq2.size(),
+                                                                                   max_mem, anchor11, anchor12, anchor21, anchor22);
+    }
+    else if (adaptive && local && !compare_match) {
+        tie(cigar, score, range1, range2) = aligner_st.wavefront_align_local_adaptive(seq1.c_str(), seq1.size(), seq2.c_str(), seq2.size(),
+                                                                                      max_mem, anchor11, anchor12, anchor21, anchor22);
+    }
+    else if (!local && compare_match) {
+        tie(cigar, score) = aligner.wavefront_align(seq1.c_str(), seq1.size(), seq2.c_str(), seq2.size());
+    }
+    else if (!local && !compare_match) {
+        tie(cigar, score) = aligner_st.wavefront_align(seq1.c_str(), seq1.size(), seq2.c_str(), seq2.size());
+    }
+    else if (local && compare_match) {
+        tie(cigar, score, range1, range2) = aligner.wavefront_align_local(seq1.c_str(), seq1.size(), seq2.c_str(), seq2.size(),
+                                                                          anchor11, anchor12, anchor21, anchor22);
+    }
+    else if (local && !compare_match) {
+        tie(cigar, score, range1, range2) = aligner_st.wavefront_align_local(seq1.c_str(), seq1.size(), seq2.c_str(), seq2.size(),
+                                                                             anchor11, anchor12, anchor21, anchor22);
     }
     
     steady_clock::time_point end_align = steady_clock::now();
