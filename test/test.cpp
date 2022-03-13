@@ -194,10 +194,11 @@ int main(int argc, char** argv) {
     std::cout << "\to = " << gap_open_sw << std::endl;
     std::cout << "\te = " << gap_extend_sw << std::endl;
     std::cout << "\tM = " << max_mem_sw << std::endl;
-    for (int mem : {0, 1, 2}) {
+    for (int mem : {0, 1, 2, 3}) {
         for (bool use_st : {false, true}) {
             bool low_mem = (mem == 1);
             bool recursive = (mem == 2);
+            bool adaptive = (mem == 3);
             std::tuple<std::vector<wfalm::CIGAROp>, int32_t, std::pair<size_t, size_t>, std::pair<size_t, size_t>> res;
             if (low_mem && !use_st) {
                 std::cout << "low memory algorithm:" << std::endl;
@@ -214,6 +215,24 @@ int main(int argc, char** argv) {
                                                                   anchor_begin_1, anchor_end_1,
                                                                   anchor_begin_2, anchor_end_2,
                                                                   false);
+            }
+            else if (adaptive && use_st) {
+                std::cout << "adaptive algorithm with suffix tree match:" << std::endl;
+                res = aligner_sw_st.wavefront_align_local_adaptive(local_seq1.c_str(), local_seq1.size(),
+                                                                   local_seq2.c_str(), local_seq2.size(),
+                                                                   max_mem_sw,
+                                                                   anchor_begin_1, anchor_end_1,
+                                                                   anchor_begin_2, anchor_end_2,
+                                                                   false);
+            }
+            else if (adaptive && !use_st) {
+                std::cout << "adaptive algorithm:" << std::endl;
+                res = aligner_sw.wavefront_align_local_adaptive(local_seq1.c_str(), local_seq1.size(),
+                                                                local_seq2.c_str(), local_seq2.size(),
+                                                                max_mem_sw,
+                                                                anchor_begin_1, anchor_end_1,
+                                                                anchor_begin_2, anchor_end_2,
+                                                                false);
             }
             else if (recursive && use_st) {
                 std::cout << "recursive algorithm with suffix tree match:" << std::endl;

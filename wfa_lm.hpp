@@ -94,7 +94,7 @@ public:
     ///   len1         Length of first sequence to be aligned
     ///   seq2         Second sequence to be aligned (need not be null-terminated)
     ///   len2         Length of second sequence to be aligned
-    ///   target_mem   The target maximum memory use in bytes
+    ///   max_mem      The target maximum memory use in bytes
     ///
     /// Return value:
     ///   Pair consisting of CIGAR string for alignment and the alignment score.
@@ -103,7 +103,7 @@ public:
                              const char* seq2, size_t len2,
                              uint64_t max_mem) const;
     
-    /// Globally align two sequences in O(s log s) memory using the recursive WFA algorithm.
+    /// Globally align two sequences in O(s log s) memory and O(sN log s) time using the recursive WFA algorithm.
     ///
     /// Args:
     ///   seq1         First sequence to be aligned (need not be null-terminated)
@@ -117,7 +117,7 @@ public:
     wavefront_align_recursive(const char* seq1, size_t len1,
                               const char* seq2, size_t len2) const;
     
-    /// Globally align two sequences in O(s^3/2) memory using the low-memory WFA algorithm.
+    /// Globally align two sequences in O(s^3/2) memory and O(sN) time using the low-memory WFA algorithm.
     ///
     /// Args:
     ///   seq1         First sequence to be aligned (need not be null-terminated)
@@ -131,7 +131,7 @@ public:
     wavefront_align_low_mem(const char* seq1, size_t len1,
                             const char* seq2, size_t len2) const;
     
-    /// Globally align two sequences in O(s^2) memory using the standard WFA algorithm.
+    /// Globally align two sequences in O(s^2) memory and O(sN) time using the standard WFA algorithm.
     ///
     /// Args:
     ///   seq1         First sequence to be aligned (need not be null-terminated)
@@ -145,9 +145,42 @@ public:
     wavefront_align(const char* seq1, size_t len1,
                     const char* seq2, size_t len2) const;
     
+    /// Locally align two sequences from a seed using the adaptive WFA as an
+    /// alignment engine.
+    /// *Can only called if WFAligner was initialized with Smith-Waterman-Gotoh
+    /// scoring parameters in the constructor.*
+    ///
+    /// Args:
+    ///   seq1             First sequence to be aligned (need not be null-terminated)
+    ///   len1             Length of first sequence to be aligned
+    ///   seq2             Second sequence to be aligned (need not be null-terminated)
+    ///   len2             Length of second sequence to be aligned
+    ///   max_mem          The target maximum memory use in bytes
+    ///   anchor_begin_1   First index of the anchor on seq1
+    ///   anchor_end_1     Past-the-last index of the anchor on seq1
+    ///   anchor_begin_2   First index of the anchor on seq2
+    ///   anchor_end_2     Past-the-last index of the anchor on seq2
+    ///   anchor_is_match  If false, the anchor sequence will be aligned, otherwise
+    ///                    it will be assumed to be a match
+    ///
+    /// Return value:
+    ///   A tuple consisting of:
+    ///     - CIGAR string for alignment
+    ///     - the alignment score
+    ///     - a pair of indexes indicating the interval of aligned sequence on seq1
+    ///     - a pair of indexes indicating the interval of aligned sequence on seq2
+    inline std::tuple<std::vector<CIGAROp>, int32_t, std::pair<size_t, size_t>, std::pair<size_t, size_t>>
+    wavefront_align_local_adaptive(const char* seq1, size_t len1,
+                                   const char* seq2, size_t len2,
+                                   uint64_t max_mem,
+                                   size_t anchor_begin_1, size_t anchor_end_1,
+                                   size_t anchor_begin_2, size_t anchor_end_2,
+                                   bool anchor_is_match = true) const;
+    
     /// Locally align two sequences from a seed using the recursive WFA as an
-    /// alignment engine. *Can only called if WFAligner was initialized with
-    /// Smith-Waterman-Gotoh scoring parameters in the constructor.*
+    /// alignment engine.
+    /// *Can only called if WFAligner was initialized with Smith-Waterman-Gotoh
+    /// scoring parameters in the constructor.*
     ///
     /// Args:
     ///   seq1             First sequence to be aligned (need not be null-terminated)
@@ -175,8 +208,9 @@ public:
                                     bool anchor_is_match = true) const;
     
     /// Locally align two sequences from a seed using the low memory WFA as an
-    /// alignment engine. *Can only called if WFAligner was initialized with
-    /// Smith-Waterman-Gotoh scoring parameters in the constructor.*
+    /// alignment engine.
+    /// *Can only called if WFAligner was initialized with Smith-Waterman-Gotoh
+    /// scoring parameters in the constructor.*
     ///
     /// Args:
     ///   seq1             First sequence to be aligned (need not be null-terminated)
@@ -204,8 +238,9 @@ public:
                                   bool anchor_is_match = true) const;
     
     /// Locally align two sequences from a seed using the standard WFA as an
-    /// alignment engine. *Can only called if WFAligner was initialized with
-    /// Smith-Waterman-Gotoh scoring parameters in the constructor.*
+    /// alignment engine.
+    /// *Can only called if WFAligner was initialized with Smith-Waterman-Gotoh
+    /// scoring parameters in the constructor.*
     ///
     /// Args:
     ///   seq1             First sequence to be aligned (need not be null-terminated)
@@ -463,7 +498,7 @@ protected:
      */
     template<typename MatchFunc, typename StringType>
     struct StandardGlobalWFA {
-        StandardGlobalWFA(const WFAligner* aligner) : aligner(aligner) {}
+        StandardGlobalWFA(const WFAligner* aligner, uint64_t max_mem) : aligner(aligner) {}
         
         inline std::pair<std::vector<CIGAROp>, int32_t>
         operator()(const StringType& seq1, const StringType& seq2) const {
@@ -474,7 +509,7 @@ protected:
     };
     template<typename MatchFunc, typename StringType>
     struct StandardSemilocalWFA {
-        StandardSemilocalWFA(const WFAligner* aligner) : aligner(aligner) {}
+        StandardSemilocalWFA(const WFAligner* aligner, uint64_t max_mem) : aligner(aligner) {}
         
         inline std::pair<std::vector<CIGAROp>, int32_t>
         operator()(const StringType& seq1, const StringType& seq2) const {
@@ -485,7 +520,7 @@ protected:
     };
     template<typename MatchFunc, typename StringType>
     struct LowMemGlobalWFA {
-        LowMemGlobalWFA(const WFAligner* aligner) : aligner(aligner) {}
+        LowMemGlobalWFA(const WFAligner* aligner, uint64_t max_mem) : aligner(aligner) {}
         
         inline std::pair<std::vector<CIGAROp>, int32_t>
         operator()(const StringType& seq1, const StringType& seq2) const {
@@ -496,7 +531,7 @@ protected:
     };
     template<typename MatchFunc, typename StringType>
     struct LowMemSemilocalWFA {
-        LowMemSemilocalWFA(const WFAligner* aligner) : aligner(aligner) {}
+        LowMemSemilocalWFA(const WFAligner* aligner, uint64_t max_mem) : aligner(aligner) {}
         
         inline std::pair<std::vector<CIGAROp>, int32_t>
         operator()(const StringType& seq1, const StringType& seq2) const {
@@ -507,7 +542,7 @@ protected:
     };
     template<typename MatchFunc, typename StringType>
     struct RecursiveGlobalWFA {
-        RecursiveGlobalWFA(const WFAligner* aligner) : aligner(aligner) {}
+        RecursiveGlobalWFA(const WFAligner* aligner, uint64_t max_mem) : aligner(aligner) {}
         
         inline std::pair<std::vector<CIGAROp>, int32_t>
         operator()(const StringType& seq1, const StringType& seq2) const {
@@ -518,7 +553,7 @@ protected:
     };
     template<typename MatchFunc, typename StringType>
     struct RecursiveSemilocalWFA {
-        RecursiveSemilocalWFA(const WFAligner* aligner) : aligner(aligner) {}
+        RecursiveSemilocalWFA(const WFAligner* aligner, uint64_t max_mem) : aligner(aligner) {}
         
         inline std::pair<std::vector<CIGAROp>, int32_t>
         operator()(const StringType& seq1, const StringType& seq2) const {
@@ -526,6 +561,30 @@ protected:
                                                                                                   std::numeric_limits<uint64_t>::max());
         }
         const WFAligner* aligner = nullptr;
+    };
+    template<typename MatchFunc, typename StringType>
+    struct AdaptiveGlobalWFA {
+        AdaptiveGlobalWFA(const WFAligner* aligner, uint64_t max_mem) : aligner(aligner), max_mem(max_mem) {}
+        
+        inline std::pair<std::vector<CIGAROp>, int32_t>
+        operator()(const StringType& seq1, const StringType& seq2) const {
+            return aligner->wavefront_dispatch<false, WFAligner::AdaptiveMem, MatchFunc, StringType>(seq1, seq2,
+                                                                                                     max_mem);
+        }
+        const WFAligner* aligner = nullptr;
+        uint64_t max_mem = 0;
+    };
+    template<typename MatchFunc, typename StringType>
+    struct AdaptiveSemilocalWFA {
+        AdaptiveSemilocalWFA(const WFAligner* aligner, uint64_t max_mem) : aligner(aligner), max_mem(max_mem) {}
+        
+        inline std::pair<std::vector<CIGAROp>, int32_t>
+        operator()(const StringType& seq1, const StringType& seq2) const {
+            return aligner->wavefront_dispatch<true, WFAligner::AdaptiveMem, MatchFunc, StringType>(seq1, seq2,
+                                                                                                    max_mem);
+        }
+        const WFAligner* aligner = nullptr;
+        uint64_t max_mem = 0;
     };
     
     // give the wrapper access to the dispatch function
@@ -535,6 +594,8 @@ protected:
     friend class LowMemSemilocalWFA<CompareMatchFunc<RevStringView>, RevStringView>;
     friend class RecursiveGlobalWFA<CompareMatchFunc<StringView>, StringView>;
     friend class RecursiveSemilocalWFA<CompareMatchFunc<RevStringView>, RevStringView>;
+    friend class AdaptiveGlobalWFA<CompareMatchFunc<StringView>, StringView>;
+    friend class AdaptiveSemilocalWFA<CompareMatchFunc<RevStringView>, RevStringView>;
     
     // central routine that back-ends the user-facing interface
     template<bool Local, int Mem, typename MatchFunc, typename StringType>
@@ -657,6 +718,7 @@ protected:
     std::tuple<std::vector<CIGAROp>, int32_t, std::pair<size_t, size_t>, std::pair<size_t, size_t>>
     wavefront_align_local_core(const char* seq1, size_t len1,
                                const char* seq2, size_t len2,
+                               uint64_t max_mem,
                                size_t anchor_begin_1, size_t anchor_end_1,
                                size_t anchor_begin_2, size_t anchor_end_2,
                                bool anchor_is_match) const;
@@ -791,6 +853,7 @@ WFAligner::wavefront_align_local(const char* seq1, size_t len1,
     typedef StandardSemilocalWFA<CompareMatchFunc<StringView>, StringView> SuffWFA;
     
     return wavefront_align_local_core<PrefWFA, AnchorWFA, SuffWFA>(seq1, len1, seq2, len2,
+                                                                   std::numeric_limits<uint64_t>::max(),
                                                                    anchor_begin_1, anchor_end_1,
                                                                    anchor_begin_2, anchor_end_2,
                                                                    anchor_is_match);
@@ -809,6 +872,7 @@ WFAligner::wavefront_align_local_low_mem(const char* seq1, size_t len1,
     typedef LowMemSemilocalWFA<CompareMatchFunc<StringView>, StringView> SuffWFA;
     
     return wavefront_align_local_core<PrefWFA, AnchorWFA, SuffWFA>(seq1, len1, seq2, len2,
+                                                                   std::numeric_limits<uint64_t>::max(),
                                                                    anchor_begin_1, anchor_end_1,
                                                                    anchor_begin_2, anchor_end_2,
                                                                    anchor_is_match);
@@ -827,6 +891,26 @@ WFAligner::wavefront_align_local_recursive(const char* seq1, size_t len1,
     typedef RecursiveSemilocalWFA<CompareMatchFunc<StringView>, StringView> SuffWFA;
     
     return wavefront_align_local_core<PrefWFA, AnchorWFA, SuffWFA>(seq1, len1, seq2, len2,
+                                                                   std::numeric_limits<uint64_t>::max(),
+                                                                   anchor_begin_1, anchor_end_1,
+                                                                   anchor_begin_2, anchor_end_2,
+                                                                   anchor_is_match);
+}
+
+inline std::tuple<std::vector<CIGAROp>, int32_t, std::pair<size_t, size_t>, std::pair<size_t, size_t>>
+WFAligner::wavefront_align_local_adaptive(const char* seq1, size_t len1,
+                                          const char* seq2, size_t len2,
+                                          uint64_t max_mem,
+                                          size_t anchor_begin_1, size_t anchor_end_1,
+                                          size_t anchor_begin_2, size_t anchor_end_2,
+                                          bool anchor_is_match) const {
+    
+    // configure the alignment and match functions
+    typedef AdaptiveSemilocalWFA<CompareMatchFunc<RevStringView>, RevStringView> PrefWFA;
+    typedef AdaptiveGlobalWFA<CompareMatchFunc<StringView>, StringView> AnchorWFA;
+    typedef AdaptiveSemilocalWFA<CompareMatchFunc<StringView>, StringView> SuffWFA;
+    
+    return wavefront_align_local_core<PrefWFA, AnchorWFA, SuffWFA>(seq1, len1, seq2, len2, max_mem,
                                                                    anchor_begin_1, anchor_end_1,
                                                                    anchor_begin_2, anchor_end_2,
                                                                    anchor_is_match);
@@ -838,7 +922,7 @@ WFAligner::wavefront_dispatch(const StringType& seq1, const StringType& seq2, ui
     
     if (seq1.size() + seq2.size() > std::numeric_limits<int32_t>::max()) {
         std::stringstream strm;
-        strm << "error:[WFAligner] WFA implementation can only align sequences of combined length < "  << std::numeric_limits<int32_t>::max() << '\n';
+        strm << "error:[WFAligner] WFA implementation can only align sequences of combined length <= "  << std::numeric_limits<int32_t>::max() << '\n';
         throw std::runtime_error(strm.str());
     }
     
@@ -1544,6 +1628,7 @@ template<typename PrefSemilocalWFA, typename AnchorGlobalWFA, typename SuffSemil
 std::tuple<std::vector<CIGAROp>, int32_t, std::pair<size_t, size_t>, std::pair<size_t, size_t>>
 WFAligner::wavefront_align_local_core(const char* seq1, size_t len1,
                                       const char* seq2, size_t len2,
+                                      uint64_t max_mem,
                                       size_t anchor_begin_1, size_t anchor_end_1,
                                       size_t anchor_begin_2, size_t anchor_end_2,
                                       bool anchor_is_match) const {
@@ -1558,7 +1643,7 @@ WFAligner::wavefront_align_local_core(const char* seq1, size_t len1,
     RevStringView pref1(seq1, 0, anchor_begin_1);
     RevStringView pref2(seq2, 0, anchor_begin_2);
     
-    auto pref_result = PrefSemilocalWFA(this)(pref1, pref2);
+    auto pref_result = PrefSemilocalWFA(this, max_mem)(pref1, pref2);
     
     std::vector<CIGAROp> cigar = std::move(pref_result.first);
     std::reverse(cigar.begin(), cigar.end());
@@ -1573,7 +1658,7 @@ WFAligner::wavefront_align_local_core(const char* seq1, size_t len1,
         StringView anchor1(seq1, anchor_begin_1, anchor_end_1 - anchor_begin_1);
         StringView anchor2(seq2, anchor_begin_2, anchor_end_2 - anchor_begin_2);
         
-        auto anchor_res = AnchorGlobalWFA(this)(anchor1, anchor2);
+        auto anchor_res = AnchorGlobalWFA(this, max_mem)(anchor1, anchor2);
         
         // get the score and add to the CIGAR
         anchor_score = convert_score(anchor_end_1 - anchor_begin_1, anchor_end_2 - anchor_begin_2,
@@ -1596,7 +1681,7 @@ WFAligner::wavefront_align_local_core(const char* seq1, size_t len1,
     StringView suff1(seq1, anchor_end_1, len1 - anchor_end_1);
     StringView suff2(seq2, anchor_end_2, len2 - anchor_end_2);
     
-    auto suff_result = SuffSemilocalWFA(this)(suff1, suff2);
+    auto suff_result = SuffSemilocalWFA(this, max_mem)(suff1, suff2);
     
     auto aligned_suff_len = cigar_base_length(suff_result.first);
     int32_t suff_score = convert_score(aligned_suff_len.first, aligned_suff_len.second,
