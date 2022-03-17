@@ -7,12 +7,12 @@ CPPFLAGS = -std=c++14 -m64 -g -O3 -I$(INCDIR) -I$(SDSLDIR)
 
 all: test benchmark
 
-.PHONY: clean $(INCDIR)/wfalm.hpp $(INCDIR)/wfalm_st.hpp
+.PHONY: clean
 
-test: test.cpp $(INCDIR)/wfalm.hpp $(INCDIR)/wfalm_st.hpp
+test: test.cpp $(INCDIR)/wfa_lm.hpp $(INCDIR)/wfa_lm_st.hpp
 	$(CXX) $(CPPFLAGS) test.cpp -o test
 
-benchmark: benchmark.cpp
+benchmark: benchmark.cpp $(INCDIR)/wfa_lm.hpp $(INCDIR)/wfa_lm_st.hpp
 	$(CXX) $(CPPFLAGS) benchmark.cpp -o benchmark
 
 clean:

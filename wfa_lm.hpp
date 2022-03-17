@@ -1137,7 +1137,7 @@ WFAligner::fall_back_to_low_mem(const StringType& seq1, const StringType& seq2,
             }
             
             // bit-hacky sub for % that works because sample_rate is a power of 2
-            bool keep = !stripe_num || (stripe_num & (sample_rate - 1));
+            bool keep = ((stripe_num & (sample_rate - 1)) == 0);
             for (size_t i = 0, k = stripe_num * stripe_width; i < stripe_width; ++i) {
                 if (keep) {
                     // we're ejecting a stripe that's being retained,
@@ -1256,7 +1256,7 @@ WFAligner::wavefront_align_low_mem_core_internal(const StringType& seq1, const S
             }
             
             // bit-hacky sub for % that works because sample_rate is a power of 2
-            bool keep = !stripe_num || (stripe_num & (sample_rate - 1));
+            bool keep = ((stripe_num & (sample_rate - 1)) == 0);
             for (size_t i = 0; i < stripe_width; ++i) {
                 if (keep) {
                     // we're ejecting a stripe that's being retained,
