@@ -37,6 +37,9 @@
 #include <limits>
 #include <tuple>
 
+#define SIMDE_ENABLE_NATIVE_ALIASES
+#include "simde/x86/sse2.h"
+
 namespace wfalm {
 
 /*
@@ -354,20 +357,28 @@ protected:
     private:
         
         inline void init_arrays() {
-            alloced = (IntType*) malloc(3 * len * sizeof(IntType));
-            M = alloced;
-            I = M + len;
-            D = I + len;
+            // we pad the array with a full vector on each end to handle boundary conditions
+            int padded_len = SIMD<IntType>::round_up(len) + 2;
+            alloced_len = 3 * padded_len;
+            if (posix_memalign((void**)&alloced, alloced_len * sizeof(__m128i), sizeof(__m128i))) {
+                throw std::runtime_error(std::string("error:[WFAligner] could not perform aligned allocatino of size " + std::to_string(alloced_len * sizeof(__m128i))).c_str());
+            }
+            M = alloced + 1;
+            I = M + padded_len;
+            D = I + padded_len;
         }
     public:
+        
         
         Wavefront() {}
         Wavefront(int32_t diag_begin, int32_t diag_end)
             : diag_begin(diag_begin), len(diag_end - diag_begin)
         {
             init_arrays();
-            for (int32_t i = 0, n = 3 * len; i < n; ++i) {
-                alloced[i] = std::numeric_limits<IntType>::min();
+            for (int32_t i = 0; i < alloced_len; ++i) {
+                // TODO: i might be able to get away with only setting the
+                // shoulders now that the ifelse condition in DP assigns -infinity
+                alloced[i] = SIMD<IntType>::min_inf();
             }
         }
         
@@ -376,10 +387,32 @@ protected:
                 diag_begin = other.diag_begin;
                 len = other.len;
                 init_arrays();
-                for (int32_t i = 0; i < len; ++i) {
-                    M[i] = other.M[i];
-                    I[i] = other.I[i];
-                    D[i] = other.D[i];
+                int unpadded_len = alloced_len / 3 - 2;
+                
+                // set the boundaries
+                *(M - 1) = SIMD<IntType>::min_inf();
+                *(M + unpadded_len) = SIMD<IntType>::min_inf();
+                *(I - 1) = SIMD<IntType>::min_inf();
+                *(I + unpadded_len) = SIMD<IntType>::min_inf();
+                *(D - 1) = SIMD<IntType>::min_inf();
+                *(D + unpadded_len) = SIMD<IntType>::min_inf();
+                
+                // copy the interior of the array
+                if (SIMD<IntType>::is_aligned(other.M)) {
+                    // the arrays are aligned
+                    for (int32_t i = 0; i < unpadded_len; ++i) {
+                        M[i] = other.M[i];
+                        I[i] = other.I[i];
+                        D[i] = other.D[i];
+                    }
+                }
+                else {
+                    // the other arrays are not aligned
+                    for (int32_t i = 0; i < unpadded_len; ++i) {
+                        M[i] = _mm_loadu_si128(other.M + i);
+                        I[i] = _mm_loadu_si128(other.I + i);
+                        D[i] = _mm_loadu_si128(other.D + i);
+                    }
                 }
             }
             return *this;
@@ -389,6 +422,7 @@ protected:
             if (this != &other) {
                 diag_begin = other.diag_begin;
                 len = other.len;
+                alloced_len = other.alloced_len;
                 if (alloced) {
                     free(alloced);
                 }
@@ -401,6 +435,7 @@ protected:
                 // alloc'ed pointer...
                 other.alloced = other.M = other.I = other.D = nullptr;
                 other.len = 0;
+                other.alloced_len = 0;
             }
             return *this;
         }
@@ -418,11 +453,65 @@ protected:
         }
         
         inline void pop_front() {
-            ++M;
-            ++I;
-            ++D;
+            // TODO: maybe change this to batched deletions?
+            // FIXME: also need to add -infinity values
+            M = (__m128i*)(((IntType*) M) + 1);
+            I = (__m128i*)(((IntType*) I) + 1);
+            D = (__m128i*)(((IntType*) D) + 1);
             ++diag_begin;
             --len;
+        }
+        
+        inline __m128i* vector_at(int32_t diag, WFMatrix_t mat) {
+            switch (mat) {
+                case MAT_M:
+                    return (__m128i*)(((IntType*) M) + (diag - diag_begin));
+                    
+                case MAT_I:
+                    return (__m128i*)(((IntType*) I) + (diag - diag_begin));
+                    
+                case MAT_D:
+                    return (__m128i*)(((IntType*) D) + (diag - diag_begin));
+            }
+        }
+        
+        inline const __m128i* vector_at(int32_t diag, WFMatrix_t mat) const {
+            switch (mat) {
+                case MAT_M:
+                    return (__m128i*)(((IntType*) M) + (diag - diag_begin));
+                    
+                case MAT_I:
+                    return (__m128i*)(((IntType*) I) + (diag - diag_begin));
+                    
+                case MAT_D:
+                    return (__m128i*)(((IntType*) D) + (diag - diag_begin));
+            }
+        }
+        
+        inline IntType& int_at(int32_t diag, WFMatrix_t mat) {
+            switch (mat) {
+                case MAT_M:
+                    return *(((IntType*) M) + (diag - diag_begin));
+                    
+                case MAT_I:
+                    return *(((IntType*) I) + (diag - diag_begin));
+                    
+                case MAT_D:
+                    return *(((IntType*) D) + (diag - diag_begin));
+            }
+        }
+        
+        inline const IntType& int_at(int32_t diag, WFMatrix_t mat) const {
+            switch (mat) {
+                case MAT_M:
+                    return *(((IntType*) M) + (diag - diag_begin));
+                    
+                case MAT_I:
+                    return *(((IntType*) I) + (diag - diag_begin));
+                    
+                case MAT_D:
+                    return *(((IntType*) D) + (diag - diag_begin));
+            }
         }
         
         inline void pop_back() {
@@ -438,16 +527,19 @@ protected:
         }
         
         inline uint64_t bytes() {
-            return sizeof(IntType) * 3 * len;
+            return sizeof(__m128i) * alloced_len;
         }
         
-        IntType* alloced = nullptr;
-        IntType* M = nullptr;
-        IntType* I = nullptr;
-        IntType* D = nullptr;
+        __m128i* alloced = nullptr;
+        __m128i* M = nullptr;
+        __m128i* I = nullptr;
+        __m128i* D = nullptr;
         
         int32_t diag_begin = 0;
+        // in number of integers
         int32_t len = 0;
+        // in number of vectors
+        int32_t alloced_len = 0;
     };
     
     
@@ -585,6 +677,59 @@ protected:
         }
         const WFAligner* aligner = nullptr;
         uint64_t max_mem = 0;
+    };
+    
+    /*
+     * templated SIMD operations by integer width
+     */
+    template<typename IntType>
+    struct SIMD {
+        static inline int vec_size() {
+            return sizeof(__m128i) / sizeof(IntType);
+        }
+        static inline int round_up(int l) {
+            return (l + vec_size() - 1) / vec_size();
+        }
+        static inline int round_down(int l) {
+            return l / vec_size();
+        }
+        static inline bool is_aligned(__m128i* ptr) {
+            return !(((uintptr_t) ptr) & (sizeof(__m128i) - 1));
+        }
+        static inline __m128i load_unaligned(const __m128i* ptr) {
+            return _mm_load_si128(ptr);
+        }
+        static inline __m128i broadcast(IntType i);
+        static inline __m128i min_inf() {
+            return broadcast(std::numeric_limits<IntType>::min());
+        }
+        static inline __m128i ones() {
+            return broadcast(1);
+        }
+        static inline __m128i twos() {
+            return broadcast(2);
+        }
+        // O, 1, ..., L-1
+        static inline __m128i range();
+        static inline __m128i bool_and(__m128i a, __m128i b) {
+            return _mm_and_si128(a, b);
+        }
+        static inline __m128i bool_not(__m128i a) {
+            // there's not bitwise not, so i have to simulate it with xor
+            return _mm_xor_si128(a, broadcast(-1));
+        }
+        static inline __m128i less(__m128i a, __m128i b);
+        static inline __m128i leq(__m128i a, __m128i b) {
+            return bool_not(less(b, a));
+        }
+        static inline __m128i max(__m128i a, __m128i b);
+        static inline __m128i add(__m128i a, __m128i b);
+        static inline __m128i subtract(__m128i a, __m128i b);
+        // t ? a : b
+        // note: assumes all 1 bits in truth condition
+        static inline __m128i ifelse(__m128i t, __m128i a, __m128i b) {
+            return _mm_blendv_epi8(b, a, t);
+        }
     };
     
     // give the wrapper access to the dispatch function
@@ -799,6 +944,69 @@ inline WFAligner::WFAligner(uint32_t _match, uint32_t _mismatch, uint32_t _gap_o
         throw std::runtime_error(strm.str());
     }
     match = _match;
+}
+
+// 8 bit integers
+template<> inline __m128i WFAligner::SIMD<int8_t>::broadcast(int8_t i) {
+    return _mm_set1_epi8(i);
+}
+template<> inline __m128i WFAligner::SIMD<int8_t>::range() {
+    static const __m128i r = _mm_setr_epi8(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15);
+    return r;
+}
+template<> inline __m128i WFAligner::SIMD<int8_t>::less(__m128i a, __m128i b) {
+    return _mm_cmplt_epi8(a, b);
+}
+template<> inline __m128i WFAligner::SIMD<int8_t>::max(__m128i a, __m128i b) {
+    return _mm_max_epi8(a, b);
+}
+template<> inline __m128i WFAligner::SIMD<int8_t>::add(__m128i a, __m128i b) {
+    return _mm_add_epi8(a, b);
+}
+template<> inline __m128i WFAligner::SIMD<int8_t>::subtract(__m128i a, __m128i b) {
+    return _mm_sub_epi8(a, b);
+}
+
+// 16 bit integers
+template<> inline __m128i WFAligner::SIMD<int16_t>::broadcast(int16_t i) {
+    return _mm_set1_epi16(i);
+}
+template<> inline __m128i WFAligner::SIMD<int16_t>::range() {
+    static const __m128i r = _mm_setr_epi16(0, 1, 2, 3, 4, 5, 6, 7);
+    return r;
+}
+template<> inline __m128i WFAligner::SIMD<int16_t>::less(__m128i a, __m128i b) {
+    return _mm_cmplt_epi16(a, b);
+}
+template<> inline __m128i WFAligner::SIMD<int16_t>::max(__m128i a, __m128i b) {
+    return _mm_max_epi16(a, b);
+}
+template<> inline __m128i WFAligner::SIMD<int16_t>::add(__m128i a, __m128i b) {
+    return _mm_add_epi16(a, b);
+}
+template<> inline __m128i WFAligner::SIMD<int16_t>::subtract(__m128i a, __m128i b) {
+    return _mm_sub_epi16(a, b);
+}
+
+// 32 bit integers
+template<> inline __m128i WFAligner::SIMD<int32_t>::broadcast(int32_t i) {
+    return _mm_set1_epi16(i);
+}
+template<> inline __m128i WFAligner::SIMD<int32_t>::range() {
+    static const __m128i r = _mm_setr_epi32(0, 1, 2, 3);
+    return r;
+}
+template<> inline __m128i WFAligner::SIMD<int32_t>::less(__m128i a, __m128i b) {
+    return _mm_cmplt_epi32(a, b);
+}
+template<> inline __m128i WFAligner::SIMD<int32_t>::max(__m128i a, __m128i b) {
+    return _mm_max_epi32(a, b);
+}
+template<> inline __m128i WFAligner::SIMD<int32_t>::add(__m128i a, __m128i b) {
+    return _mm_add_epi32(a, b);
+}
+template<> inline __m128i WFAligner::SIMD<int32_t>::subtract(__m128i a, __m128i b) {
+    return _mm_sub_epi32(a, b);
 }
 
 
@@ -1028,7 +1236,7 @@ WFAligner::wavefront_align_core(const StringType& seq1, const StringType& seq2,
     // init wavefront to the upper left of both sequences' starts
     std::vector<Wavefront<IntType>> wfs;
     wfs.emplace_back(0, 1);
-    wfs.front().M[0] = 0;
+    wfs.front().int_at(0, MAT_M) = 0;
     
     // do wavefront iterations until hit max score or alignment finishes
     wavefront_extend(seq1, seq2, wfs.front(), match_func);
@@ -1137,7 +1345,7 @@ WFAligner::fall_back_to_low_mem(const StringType& seq1, const StringType& seq2,
             }
             
             // bit-hacky sub for % that works because sample_rate is a power of 2
-            bool keep = !stripe_num || (stripe_num & (sample_rate - 1));
+            bool keep = ((stripe_num & (sample_rate - 1)) == 0);
             for (size_t i = 0, k = stripe_num * stripe_width; i < stripe_width; ++i) {
                 if (keep) {
                     // we're ejecting a stripe that's being retained,
@@ -1182,7 +1390,7 @@ WFAligner::wavefront_align_low_mem_core(const StringType& seq1, const StringType
     // init wavefront to the upper left of both sequences' starts
     std::deque<Wavefront<IntType>> wf_buffer;
     wf_buffer.emplace_back(0, 1);
-    wf_buffer.front().M[0] = 0;
+    wf_buffer.front().int_at(0, MAT_M) = 0;
     size_t s = 0;
     
     // make sure the first wavefront is extended
@@ -1256,7 +1464,7 @@ WFAligner::wavefront_align_low_mem_core_internal(const StringType& seq1, const S
             }
             
             // bit-hacky sub for % that works because sample_rate is a power of 2
-            bool keep = !stripe_num || (stripe_num & (sample_rate - 1));
+            bool keep = ((stripe_num & (sample_rate - 1)) == 0);
             for (size_t i = 0; i < stripe_width; ++i) {
                 if (keep) {
                     // we're ejecting a stripe that's being retained,
@@ -1406,7 +1614,7 @@ WFAligner::wavefront_align_recursive_core(const StringType& seq1, const StringTy
     // init wavefront to the upper left of both sequences' starts
     std::deque<Wavefront<IntType>> wf_buffer;
     wf_buffer.emplace_back(0, 1);
-    wf_buffer.front().M[0] = 0;
+    wf_buffer.front().int_at(0, MAT_M) = 0;
     size_t s = 0;
     
     wavefront_extend(seq1, seq2, wf_buffer.front(), match_func);
@@ -1705,13 +1913,14 @@ template<typename StringType, typename MatchFunc, typename IntType>
 inline void WFAligner::wavefront_extend(const StringType& seq1, const StringType& seq2,
                                         Wavefront<IntType>& wf, const MatchFunc& match_func) const {
     
+    // TODO: vectorize this
     for (int64_t k = 0; k < wf.size(); ++k) {
         int64_t diag = wf.diag_begin + k;
-        int64_t anti_diag = wf.M[k];
+        int64_t anti_diag = wf.int_at(diag, MAT_M);
         int64_t i = (diag + anti_diag) / 2;
         int64_t j = (anti_diag - diag) / 2;
         if (i >= 0 && j >= 0) {
-            wf.M[k] += 2 * match_func(i, j);
+            wf.int_at(diag, MAT_M) += 2 * match_func(i, j);
         }
     }
 }
@@ -1762,60 +1971,172 @@ inline WFAligner::Wavefront<IntType> WFAligner::wavefront_next(const StringType&
         // open gaps
         if (wfs.size() >= gap_extend + gap_open) {
             const auto& wf_prev = wfs[wfs.size() - gap_extend - gap_open];
-            int64_t prev_diag_end = wf_prev.diag_begin + wf_prev.size();
-            for (auto k = lo; k < hi; ++k) {
-                if (k - 1 >= wf_prev.diag_begin && k - 1 < prev_diag_end) {
-                    int64_t a = wf_prev.M[k - 1 - wf_prev.diag_begin] + 1;
-                    if ((a + k) / 2 <= (int64_t) seq1.size() && (a - k) / 2 <= (int64_t) seq2.size()) {
-                        wf.I[k - lo] = a;
-                    }
-                }
-                if (k + 1 >= wf_prev.diag_begin && k + 1 < prev_diag_end) {
-                    int64_t a = wf_prev.M[k + 1 - wf_prev.diag_begin] + 1;
-                    if ((a + k) / 2 <= (int64_t) seq1.size() && (a - k) / 2 <= (int64_t) seq2.size()) {
-                        wf.D[k - lo] = a;
-                    }
-                }
+            
+            // TODO: check for alignment and split out the loop with alignr instead of load?
+            // note: we can assume that the current array is wider than the previous because of the
+            // initialization
+            for (int begin = wf_prev.diag_begin - wf.diag_begin + 1,
+                 k = SIMD<IntType>::round_down(begin),
+                 n = SIMD<IntType>::round_up(begin + wf_prev.size()),
+                 first_diag = wf.diag_begin + k * SIMD<IntType>::vec_size();
+                 k < n; ++k, first_diag += SIMD<IntType>::vec_size()) {
+                
+                // the DP values (we assume that the previous vector won't be aligned to the "off-by-1" index)
+                __m128i a = SIMD<IntType>::add(SIMD<IntType>::load_unaligned(wf_prev.vector_at(first_diag - 1, MAT_M)),
+                                               SIMD<IntType>::ones());
+                // the diagonal values
+                __m128i d = SIMD<IntType>::add(SIMD<IntType>::broadcast(k * SIMD<IntType>::vec_size()),
+                                               SIMD<IntType>::range());
+                
+                // check that it doesn't go outside the matrix
+                __m128i bnd = SIMD<IntType>::bool_and(SIMD<IntType>::leq(SIMD<IntType>::add(a, d),
+                                                                         SIMD<IntType>::broadcast(2 * seq1.size())),
+                                                      SIMD<IntType>::leq(SIMD<IntType>::subtract(a, d),
+                                                                         SIMD<IntType>::broadcast(2 * seq2.size())));
+                // store all of the values that were inside the matrix
+                wf.I[k] = SIMD<IntType>::ifelse(bnd, a, SIMD<IntType>::min_inf());
             }
+            for (int begin = wf_prev.diag_begin - wf.diag_begin - 1,
+                 k = SIMD<IntType>::round_down(begin),
+                 n = SIMD<IntType>::round_up(begin + wf_prev.size()),
+                 first_diag = wf.diag_begin + k * SIMD<IntType>::vec_size();
+                 k < n; ++k, first_diag += SIMD<IntType>::vec_size()) {
+                
+                // the DP values (we assume that the previous vector won't be aligned to the "off-by-1" index)
+                __m128i a = SIMD<IntType>::add(SIMD<IntType>::load_unaligned(wf_prev.vector_at(first_diag + 1, MAT_M)),
+                                               SIMD<IntType>::ones());
+                // the diagonal values
+                __m128i d = SIMD<IntType>::add(SIMD<IntType>::broadcast(k * SIMD<IntType>::vec_size()),
+                                               SIMD<IntType>::range());
+                
+                // check that it doesn't go outside the matrix
+                __m128i bnd = SIMD<IntType>::bool_and(SIMD<IntType>::leq(SIMD<IntType>::add(a, d),
+                                                                         SIMD<IntType>::broadcast(2 * seq1.size())),
+                                                      SIMD<IntType>::leq(SIMD<IntType>::subtract(a, d),
+                                                                         SIMD<IntType>::broadcast(2 * seq2.size())));
+                // store all of the values that were inside the matrix
+                wf.D[k] = SIMD<IntType>::ifelse(bnd, a, SIMD<IntType>::min_inf());
+            }
+            
+//            for (auto k = lo; k < hi; ++k) {
+//                if (k - 1 >= wf_prev.diag_begin && k - 1 < prev_diag_end) {
+//                    int64_t a = wf_prev.M[k - 1 - wf_prev.diag_begin] + 1;
+//                    if ((a + k) / 2 <= (int64_t) seq1.size() && (a - k) / 2 <= (int64_t) seq2.size()) {
+//                        wf.I[k - lo] = a;
+//                    }
+//                }
+//                if (k + 1 >= wf_prev.diag_begin && k + 1 < prev_diag_end) {
+//                    int64_t a = wf_prev.M[k + 1 - wf_prev.diag_begin] + 1;
+//                    if ((a + k) / 2 <= (int64_t) seq1.size() && (a - k) / 2 <= (int64_t) seq2.size()) {
+//                        wf.D[k - lo] = a;
+//                    }
+//                }
+//            }
         }
         
         // extend gaps
         if (wfs.size() >= gap_extend) {
             const auto& wf_prev = wfs[wfs.size() - gap_extend];
-            int64_t prev_diag_end = wf_prev.diag_begin + wf_prev.size();
-            for (auto k = lo; k < hi; ++k) {
-                if (k - 1 >= wf_prev.diag_begin && k - 1 < prev_diag_end) {
-                    int64_t a = wf_prev.I[k - 1 - wf_prev.diag_begin] + 1;
-                    if ((a + k) / 2 <= (int64_t) seq1.size() && (a - k) / 2 <= (int64_t) seq2.size()) {
-                        wf.I[k - lo] = std::max<int32_t>(wf.I[k - lo], a);
-                    }
-                }
-                if (k + 1 >= wf_prev.diag_begin && k + 1 < prev_diag_end) {
-                    int64_t a = wf_prev.D[k + 1 - wf_prev.diag_begin] + 1;
-                    if ((a + k) / 2 <= (int64_t) seq1.size() && (a - k) / 2 <= (int64_t) seq2.size()) {
-                        wf.D[k - lo] = std::max<int32_t>(wf.D[k - lo], a);
-                    }
-                }
+            for (int begin = wf_prev.diag_begin - wf.diag_begin + 1,
+                 k = SIMD<IntType>::round_down(begin),
+                 n = SIMD<IntType>::round_up(begin + wf_prev.size()),
+                 first_diag = wf.diag_begin + k * SIMD<IntType>::vec_size();
+                 k < n; ++k, first_diag += SIMD<IntType>::vec_size()) {
+                
+                // the DP values (we assume that the previous vector won't be aligned to the "off-by-1" index)
+                __m128i a = SIMD<IntType>::add(SIMD<IntType>::load_unaligned(wf_prev.vector_at(first_diag - 1, MAT_I)),
+                                               SIMD<IntType>::ones());
+                // the diagonal values
+                __m128i d = SIMD<IntType>::add(SIMD<IntType>::broadcast(k * SIMD<IntType>::vec_size()),
+                                               SIMD<IntType>::range());
+                
+                // check that it doesn't go outside the matrix
+                __m128i bnd = SIMD<IntType>::bool_and(SIMD<IntType>::leq(SIMD<IntType>::add(a, d),
+                                                                         SIMD<IntType>::broadcast(2 * seq1.size())),
+                                                      SIMD<IntType>::leq(SIMD<IntType>::subtract(a, d),
+                                                                         SIMD<IntType>::broadcast(2 * seq2.size())));
+                // store all of the values that were inside the matrix
+                wf.I[k] = SIMD<IntType>::max(SIMD<IntType>::ifelse(bnd, a, SIMD<IntType>::min_inf()), wf.I[k]);
             }
+            
+            for (int begin = wf_prev.diag_begin - wf.diag_begin - 1,
+                 k = SIMD<IntType>::round_down(begin),
+                 n = SIMD<IntType>::round_up(begin + wf_prev.size()),
+                 first_diag = wf.diag_begin + k * SIMD<IntType>::vec_size();
+                 k < n; ++k, first_diag += SIMD<IntType>::vec_size()) {
+                
+                // the DP values (we assume that the previous vector won't be aligned to the "off-by-1" index)
+                __m128i a = SIMD<IntType>::add(SIMD<IntType>::load_unaligned(wf_prev.vector_at(first_diag + 1, MAT_D)),
+                                               SIMD<IntType>::ones());
+                // the diagonal values
+                __m128i d = SIMD<IntType>::add(SIMD<IntType>::broadcast(k * SIMD<IntType>::vec_size()),
+                                               SIMD<IntType>::range());
+                
+                // check that it doesn't go outside the matrix
+                __m128i bnd = SIMD<IntType>::bool_and(SIMD<IntType>::leq(SIMD<IntType>::add(a, d),
+                                                                         SIMD<IntType>::broadcast(2 * seq1.size())),
+                                                      SIMD<IntType>::leq(SIMD<IntType>::subtract(a, d),
+                                                                         SIMD<IntType>::broadcast(2 * seq2.size())));
+                // store all of the values that were inside the matrix
+                wf.D[k] = SIMD<IntType>::max(wf.D[k], SIMD<IntType>::ifelse(bnd, a, SIMD<IntType>::min_inf()));
+            }
+            
+//            int64_t prev_diag_end = wf_prev.diag_begin + wf_prev.size();
+//            for (auto k = lo; k < hi; ++k) {
+//                if (k - 1 >= wf_prev.diag_begin && k - 1 < prev_diag_end) {
+//                    int64_t a = wf_prev.I[k - 1 - wf_prev.diag_begin] + 1;
+//                    if ((a + k) / 2 <= (int64_t) seq1.size() && (a - k) / 2 <= (int64_t) seq2.size()) {
+//                        wf.I[k - lo] = std::max<int32_t>(wf.I[k - lo], a);
+//                    }
+//                }
+//                if (k + 1 >= wf_prev.diag_begin && k + 1 < prev_diag_end) {
+//                    int64_t a = wf_prev.D[k + 1 - wf_prev.diag_begin] + 1;
+//                    if ((a + k) / 2 <= (int64_t) seq1.size() && (a - k) / 2 <= (int64_t) seq2.size()) {
+//                        wf.D[k - lo] = std::max<int32_t>(wf.D[k - lo], a);
+//                    }
+//                }
+//            }
         }
         
         // mismatches
         if (wfs.size() >= mismatch) {
             const auto& wf_prev = wfs[wfs.size() - mismatch];
-            int64_t prev_diag_end = wf_prev.diag_begin + wf_prev.size();
-            for (auto k = lo; k < hi; ++k) {
-                if (k >= wf_prev.diag_begin && k < prev_diag_end) {
-                    int64_t a = wf_prev.M[k - wf_prev.diag_begin] + 2;
-                    if ((a + k) / 2 <= (int64_t) seq1.size() && (a - k) / 2 <= (int64_t) seq2.size()) {
-                        wf.M[k - lo] = a;
-                    }
-                }
+            for (int begin = wf_prev.diag_begin - wf.diag_begin,
+                 k = SIMD<IntType>::round_down(begin),
+                 n = SIMD<IntType>::round_up(begin + wf_prev.size()),
+                 first_diag = wf.diag_begin + k * SIMD<IntType>::vec_size();
+                 k < n; ++k, first_diag += SIMD<IntType>::vec_size()) {
+                
+                // the DP values (we assume that the previous vector won't be aligned to the same index)
+                __m128i a = SIMD<IntType>::add(SIMD<IntType>::load_unaligned(wf_prev.vector_at(first_diag, MAT_M)),
+                                               SIMD<IntType>::twos());
+                // the diagonal values
+                __m128i d = SIMD<IntType>::add(SIMD<IntType>::broadcast(k * SIMD<IntType>::vec_size()),
+                                               SIMD<IntType>::range());
+                
+                // check that it doesn't go outside the matrix
+                __m128i bnd = SIMD<IntType>::bool_and(SIMD<IntType>::leq(SIMD<IntType>::add(a, d),
+                                                                         SIMD<IntType>::broadcast(2 * seq1.size())),
+                                                      SIMD<IntType>::leq(SIMD<IntType>::subtract(a, d),
+                                                                         SIMD<IntType>::broadcast(2 * seq2.size())));
+                // store all of the values that were inside the matrix
+                wf.M[k] = SIMD<IntType>::ifelse(bnd, a, SIMD<IntType>::min_inf());
             }
+            
+//            int64_t prev_diag_end = wf_prev.diag_begin + wf_prev.size();
+//            for (auto k = lo; k < hi; ++k) {
+//                if (k >= wf_prev.diag_begin && k < prev_diag_end) {
+//                    int64_t a = wf_prev.M[k - wf_prev.diag_begin] + 2;
+//                    if ((a + k) / 2 <= (int64_t) seq1.size() && (a - k) / 2 <= (int64_t) seq2.size()) {
+//                        wf.M[k - lo] = a;
+//                    }
+//                }
+//            }
         }
         
         // calculate the opt
-        for (size_t k = 0; k < wf.size(); ++k) {
-            wf.M[k] = std::max(wf.M[k], std::max(wf.I[k], wf.D[k]));
+        for (int k = 0, n = SIMD<IntType>::round_up(wf.size()); k < n; ++k) {
+            wf.M[k] = SIMD<IntType>::max(wf.M[k], SIMD<IntType>::max(wf.I[k], wf.D[k]));
         }
     }
     
@@ -1827,18 +2148,19 @@ inline void WFAligner::wavefront_prune(WFAligner::Wavefront<IntType>& wf) const 
     // TODO: for now, just skipping pruning for local alignment, but actually should come up
     // with a better pruning mechanism for it...
     if (!wf.empty() && lagging_diagonal_prune >= 0 && !Local) {
-        IntType max_anti_diag = std::numeric_limits<IntType>::min();
-        for (int32_t i = 0; i < wf.size(); ++i) {
-            max_anti_diag = std::max(max_anti_diag, wf.M[i]);
-        }
-        
-        while (wf.M[0] < max_anti_diag - lagging_diagonal_prune) {
-            wf.pop_front();
-        }
-        
-        while (wf.M[wf.len - 1] < max_anti_diag - lagging_diagonal_prune) {
-            wf.pop_back();
-        }
+        // FIXME: re-enable this
+//        IntType max_anti_diag = std::numeric_limits<IntType>::min();
+//        for (int32_t i = 0; i < wf.size(); ++i) {
+//            max_anti_diag = std::max(max_anti_diag, wf.M[i]);
+//        }
+//
+//        while (wf.M[0] < max_anti_diag - lagging_diagonal_prune) {
+//            wf.pop_front();
+//        }
+//
+//        while (wf.M[wf.len - 1] < max_anti_diag - lagging_diagonal_prune) {
+//            wf.pop_back();
+//        }
     }
 }
 
@@ -1846,7 +2168,7 @@ template<typename IntType>
 inline bool WFAligner::wavefront_reached(const WFAligner::Wavefront<IntType>& wf,
                                          int32_t diag, int32_t anti_diag) const {
     if (diag >= wf.diag_begin && diag < wf.diag_begin + wf.size()) {
-        return (wf.M[diag - wf.diag_begin] == anti_diag);
+        return (wf.int_at(diag, MAT_M) == anti_diag);
     }
     return false;
 }
@@ -1971,7 +2293,7 @@ void WFAligner::wavefront_traceback_internal(const StringType& seq1, const Strin
         // we're in the match/mismatch matrix
         const auto& wf = wfs[s];
         if (mat == MAT_M) {
-            int64_t a = wf.M[d - wf.diag_begin];
+            int64_t a = wf.int_at(d, MAT_M);// wf.M[d - wf.diag_begin];
             // TODO: i don't love this solution for the partial traceback problem...
             a -= 2 * lead_matches;
             lead_matches = 0;
@@ -1979,7 +2301,7 @@ void WFAligner::wavefront_traceback_internal(const StringType& seq1, const Strin
             int64_t i = (d + a) / 2 - 1;
             int64_t j = (a - d) / 2 - 1;
             while (i >= 0 && j >= 0 && seq1[i] == seq2[j]
-                   && a != wf.I[d - wf.diag_begin] && a != wf.D[d - wf.diag_begin]) {
+                   && a != wf.int_at(d, MAT_I) && a != wf.int_at(d, MAT_D)) {
                 op_len += 1;
                 --i;
                 --j;
@@ -1991,7 +2313,7 @@ void WFAligner::wavefront_traceback_internal(const StringType& seq1, const Strin
                 // by a wf_next, so we skip that part of the traceback
                 break;
             }
-            if (a == wf.I[d - wf.diag_begin]) {
+            if (a == wf.int_at(d, MAT_I)) {
                 // this is where an insertion closed
                 if (op_len != 0) {
                     cigar.emplace_back('M', op_len);
@@ -2001,7 +2323,7 @@ void WFAligner::wavefront_traceback_internal(const StringType& seq1, const Strin
                 lead_matches = 0;
                 continue;
             }
-            else if (a == wf.D[d - wf.diag_begin]) {
+            else if (a == wf.int_at(d, MAT_I)) {
                 // this is where a deletion closed
                 if (op_len != 0) {
                     cigar.emplace_back('M', op_len);
@@ -2027,7 +2349,7 @@ void WFAligner::wavefront_traceback_internal(const StringType& seq1, const Strin
             if (s >= gap_extend) {
                 const auto& wf_prev = wfs[s - gap_extend];
                 if (d - 1 >= wf_prev.diag_begin && d - 1 < wf_prev.diag_begin + (int64_t) wf_prev.size()) {
-                    if (wf.I[d - wf.diag_begin] == wf_prev.I[d - 1 - wf_prev.diag_begin] + 1) {
+                    if (wf.int_at(d, MAT_I) == wf_prev.int_at(d - 1, MAT_I) + 1) {
                         // an insert extended here
                         s -= gap_extend;
                         op_len += 1;
@@ -2039,7 +2361,7 @@ void WFAligner::wavefront_traceback_internal(const StringType& seq1, const Strin
             if (s >= gap_extend + gap_open) {
                 const auto& wf_prev = wfs[s - gap_extend - gap_open];
                 if (d - 1 >= wf_prev.diag_begin  && d - 1 < wf_prev.diag_begin + (int64_t) wf_prev.size()) {
-                    if (wf.I[d - wf.diag_begin] == wf_prev.M[d - 1 - wf_prev.diag_begin] + 1) {
+                    if (wf.int_at(d, MAT_I) == wf_prev.int_at(d - 1, MAT_M) + 1) {
                         // an insert opened here
                         s -= gap_extend + gap_open;
                         op_len += 1;
@@ -2060,7 +2382,7 @@ void WFAligner::wavefront_traceback_internal(const StringType& seq1, const Strin
             if (s >= gap_extend) {
                 const auto& wf_prev = wfs[s - gap_extend];
                 if (d + 1 >= wf_prev.diag_begin && d + 1 < wf_prev.diag_begin + (int64_t) wf_prev.size()) {
-                    if (wf.D[d - wf.diag_begin] == wf_prev.D[d + 1 - wf_prev.diag_begin] + 1) {
+                    if (wf.int_at(d, MAT_D) == wf_prev.int_at(d + 1, MAT_D) + 1) {
                         // a deletion extended here
                         s -= gap_extend;
                         op_len += 1;
@@ -2072,7 +2394,7 @@ void WFAligner::wavefront_traceback_internal(const StringType& seq1, const Strin
             if (s >= gap_extend + gap_open) {
                 const auto& wf_prev = wfs[s - gap_extend - gap_open];
                 if (d + 1 >= wf_prev.diag_begin && d + 1 < wf_prev.diag_begin + (int64_t) wf_prev.size()){
-                    if (wf.D[d - wf.diag_begin] == wf_prev.M[d + 1 - wf_prev.diag_begin] + 1) {
+                    if (wf.int_at(d, MAT_D) == wf_prev.int_at(d + 1, MAT_M) + 1) {
                         // a deletion opened here
                         s -= gap_extend + gap_open;
                         op_len += 1;
@@ -2121,14 +2443,14 @@ uint32_t WFAligner::gcd(uint32_t a, uint32_t b) const {
 
 template<typename StringType, typename IntType>
 inline void WFAligner::find_local_opt(const StringType& seq1, const StringType& seq2,
-                                       int64_t s, const Wavefront<IntType>& wf,
-                                       int64_t& opt, int64_t& opt_diag, int64_t& opt_s, size_t& max_s) const {
-    
+                                      int64_t s, const Wavefront<IntType>& wf,
+                                      int64_t& opt, int64_t& opt_diag, int64_t& opt_s, size_t& max_s) const {
+    // TODO: this should be vectorized as well
     for (int64_t k = 0; k < wf.size(); ++k) {
         // the score of the corresponding local alignment
-        auto a = wf.M[k];
+        auto a = wf.int_at(k, MAT_M);
         int32_t local_s = match * a - s;
-        if (local_s > opt && a >= std::abs(wf.diag_begin + k)) {
+        if (local_s > opt && a > std::abs(wf.diag_begin + k)) {
             // we found a new best that is inside the matrix
             opt = local_s;
             opt_diag = wf.diag_begin + k;
@@ -2192,7 +2514,7 @@ template<typename IntType>
 inline void WFAligner::print_wf(const WFAligner::Wavefront<IntType>& wf, int diag_begin, int diag_end) const {
     for (int d = diag_begin; d < diag_end; ++d) {
         if (d >= wf.diag_begin && d < wf.diag_begin + (int) wf.size()) {
-            int a = wf.M[d - wf.diag_begin];
+            int a = wf.int_at(d, MAT_M);
             if (a > -100) {
                 std::cerr << (int) a;
             }
@@ -2205,7 +2527,7 @@ inline void WFAligner::print_wf(const WFAligner::Wavefront<IntType>& wf, int dia
     std::cerr << std::endl;
     for (int d = diag_begin; d < diag_end; ++d) {
         if (d >= wf.diag_begin && d < wf.diag_begin + (int) wf.size()) {
-            int a = wf.I[d - wf.diag_begin];
+            int a = wf.int_at(d, MAT_I);
             if (a > -100) {
                 std::cerr << (int) a;
             }
@@ -2218,7 +2540,7 @@ inline void WFAligner::print_wf(const WFAligner::Wavefront<IntType>& wf, int dia
     std::cerr << std::endl;
     for (int d = diag_begin; d < diag_end; ++d) {
         if (d >= wf.diag_begin && d < wf.diag_begin + (int) wf.size()) {
-            int a = wf.D[d - wf.diag_begin];
+            int a = wf.int_at(d, MAT_D);
             if (a > -100) {
                 std::cerr << (int) a;
             }
@@ -2351,7 +2673,7 @@ void WFAligner::wavefront_viz(const StringType& seq1, const StringType& seq2,
         const auto& wf = wfs[s];
         for (int k = 0; k < wf.size(); ++k) {
             int d = wf.diag_begin + k;
-            int a = wf.M[k];
+            int a = wf.int_at(d, MAT_M);
             if (a < -2) {
                 continue;
             }
