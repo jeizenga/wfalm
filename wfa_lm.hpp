@@ -38,7 +38,7 @@
 #include <tuple>
 
 #define SIMDE_ENABLE_NATIVE_ALIASES
-#include "simde/x86/sse2.h"
+#include "simde/x86/sse4.2.h"
 
 namespace wfalm {
 
@@ -300,6 +300,7 @@ protected:
     static const int Recursive = 2;
     static const int AdaptiveMem = 3;
     
+    
     /*
      * Adapter to avoid string copying for when aligning subintervals
      */
@@ -310,7 +311,7 @@ protected:
             
         }
         
-        inline char operator[](size_t idx) const {
+        inline const char& operator[](size_t idx) const {
             return seq[idx];
         }
         
@@ -336,7 +337,7 @@ protected:
             
         }
         
-        inline char operator[](size_t idx) const {
+        inline const char& operator[](size_t idx) const {
             return *(seql - idx);
         }
         
@@ -345,13 +346,124 @@ protected:
         }
         
     private:
+        
         // last char in the seq
         const char* seql;
         size_t len;
     };
     
+    // a match-computing function based on direct character comparison
+    template<typename StringType>
+    struct CompareMatchFunc {
+        CompareMatchFunc(const StringType& seq1, const StringType& seq2)
+            : seq1(seq1), seq2(seq2)
+        {
+            
+        }
+        
+        // leave the actual implementation to the template specializations
+        inline size_t operator()(size_t i, size_t j) const;
+        
+    protected:
+        
+        template<bool Reversed>
+        inline void load(size_t i, size_t j, __m128i& vec1, __m128i& vec2) const {
+            if (Reversed) {
+                static const __m128i reverser = _mm_setr_epi8(15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0);
+                vec1 = _mm_shuffle_epi8(SIMD<int8_t>::load_unaligned((__m128i const*)(&seq1[i] - sizeof(__m128i) + 1)), reverser);
+                vec2 = _mm_shuffle_epi8(SIMD<int8_t>::load_unaligned((__m128i const*)(&seq2[j] - sizeof(__m128i) + 1)), reverser);
+                
+            }
+            else {
+                vec1 = SIMD<int8_t>::load_unaligned((__m128i const*)&seq1[i]);
+                vec2 = SIMD<int8_t>::load_unaligned((__m128i const*)&seq2[j]);
+            }
+        }
+        
+        inline void partial_vec_match(size_t& i, size_t& j, bool& found_mismatch,
+                                      const __m128i& vec1, const __m128i& vec2) const {
+            
+            __m128i eq = SIMD<int8_t>::eq(vec1, vec2);
+            // find the first 0 if there is one
+            __m128i pref = _mm_cvtepi8_epi16(eq);
+            __m128i pos = _mm_minpos_epu16(_mm_cvtepi8_epi16(eq));
+            if (_mm_extract_epi16(pos, 0) != 0) {
+                // there are no mismatches
+                i += 8;
+                j += 8;
+                pos = _mm_minpos_epu16(_mm_cvtepi8_epi16(_mm_alignr_epi8(SIMD<int8_t>::broadcast(0), eq, 8)));
+                found_mismatch = (_mm_extract_epi16(pos, 0) == 0);
+                if (found_mismatch) {
+                    size_t len = _mm_extract_epi16(pos, 1);
+                    i += len;
+                    j += len;
+                }
+                else {
+                    // there were still no mismatches
+                    i += 8;
+                    j += 8;
+                }
+            }
+            else {
+                size_t len = _mm_extract_epi16(pos, 1);
+                i += len;
+                j += len;
+                found_mismatch = true;
+            }
+        }
+        
+        // a template-controlled generic function for the specializations to call
+        template<bool Reversed>
+        inline size_t match_func_internal(size_t i, size_t j) const {
+            size_t init = i;
+            bool found_mismatch = false;
+            // do as much as we can with
+            if (i + SIMD<int8_t>::vec_size() <= seq1.size() &&
+                j + SIMD<int8_t>::vec_size() <= seq2.size()) {
+                
+                // TODO: i could maybe load aligned after the first iteration, but most of these will probably
+                // be finished in only one call, and you can't guarantee alignment of both strings...
+                
+                // try to find a partial match of the first vector
+                __m128i vec1, vec2;
+                load<Reversed>(i, j, vec1, vec2);
+                partial_vec_match(i, j, found_mismatch, vec1, vec2);
+                
+                if (!found_mismatch) {
+                    // we matched the whole vector, so now we transition into a cheaper matching of an entire vector
+                    // to move quickly in instances of very long matches
+                    while (i + SIMD<int8_t>::vec_size() <= seq1.size() &&
+                           j + SIMD<int8_t>::vec_size() <= seq2.size()) {
+                        
+                        load<Reversed>(i, j, vec1, vec2);
+                        
+                        if (_mm_test_all_ones(SIMD<int8_t>::eq(vec1, vec2))) {
+                            // we matched the entire vector
+                            i += 16;
+                            j += 16;
+                        }
+                        else {
+                            // there's a mismatch in the vector somewhere
+                            // TODO: i could maybe re-use the eq vector...
+                            partial_vec_match(i, j, found_mismatch, vec1, vec2);
+                            break;
+                        }
+                    }
+                }
+            }
+            // walk out any matches that were too close to the end of the sequence to use vectors
+            while (!found_mismatch && i < seq1.size() && j < seq2.size() && seq1[i] == seq2[j]) {
+                ++i;
+                ++j;
+            }
+            return i - init;
+        }
+        
+        const StringType& seq1;
+        const StringType& seq2;
+    };
     
-    // TODO: use posix_memalign?
+    
     template<typename IntType>
     struct Wavefront {
         
@@ -632,28 +744,6 @@ protected:
         const std::vector<std::pair<int32_t, Wavefront<IntType>>>& wf_bank;
     };
     
-    // a match-computing function based on direct character comparison
-    template<typename StringType>
-    struct CompareMatchFunc {
-        CompareMatchFunc(const StringType& seq1, const StringType& seq2)
-            : seq1(seq1), seq2(seq2)
-        {
-            
-        }
-        
-        inline size_t operator()(size_t i, size_t j) const {
-            size_t init = i;
-            while (i < seq1.size() && j < seq2.size() && seq1[i] == seq2[j]) {
-                ++i;
-                ++j;
-            }
-            return i - init;
-        }
-        
-        const StringType& seq1;
-        const StringType& seq2;
-    };
-    
     /*
      * wrappers to perform WFA alignment algorithms for dependency injection
      */
@@ -787,6 +877,7 @@ protected:
             // there's not bitwise not, so i have to simulate it with xor
             return _mm_xor_si128(a, broadcast(-1));
         }
+        static inline __m128i eq(__m128i a, __m128i b);
         static inline __m128i less(__m128i a, __m128i b);
         static inline __m128i leq(__m128i a, __m128i b) {
             return mask_not(less(b, a));
@@ -1015,6 +1106,14 @@ inline WFAligner::WFAligner(uint32_t _match, uint32_t _mismatch, uint32_t _gap_o
     match = _match;
 }
 
+template<> inline size_t WFAligner::CompareMatchFunc<WFAligner::StringView>::operator()(size_t i, size_t j) const {
+    return match_func_internal<false>(i, j);
+}
+
+template<> inline size_t WFAligner::CompareMatchFunc<WFAligner::RevStringView>::operator()(size_t i, size_t j) const {
+    return match_func_internal<true>(i, j);
+}
+
 // 8 bit integers
 template<> inline __m128i WFAligner::SIMD<int8_t>::broadcast(int8_t i) {
     return _mm_set1_epi8(i);
@@ -1022,6 +1121,9 @@ template<> inline __m128i WFAligner::SIMD<int8_t>::broadcast(int8_t i) {
 template<> inline __m128i WFAligner::SIMD<int8_t>::range() {
     static const __m128i r = _mm_setr_epi8(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15);
     return r;
+}
+template<> inline __m128i WFAligner::SIMD<int8_t>::eq(__m128i a, __m128i b) {
+    return _mm_cmpeq_epi8(a, b);
 }
 template<> inline __m128i WFAligner::SIMD<int8_t>::less(__m128i a, __m128i b) {
     return _mm_cmplt_epi8(a, b);
@@ -1044,6 +1146,9 @@ template<> inline __m128i WFAligner::SIMD<int16_t>::range() {
     static const __m128i r = _mm_setr_epi16(0, 1, 2, 3, 4, 5, 6, 7);
     return r;
 }
+template<> inline __m128i WFAligner::SIMD<int16_t>::eq(__m128i a, __m128i b) {
+    return _mm_cmpeq_epi16(a, b);
+}
 template<> inline __m128i WFAligner::SIMD<int16_t>::less(__m128i a, __m128i b) {
     return _mm_cmplt_epi16(a, b);
 }
@@ -1059,11 +1164,14 @@ template<> inline __m128i WFAligner::SIMD<int16_t>::subtract(__m128i a, __m128i 
 
 // 32 bit integers
 template<> inline __m128i WFAligner::SIMD<int32_t>::broadcast(int32_t i) {
-    return _mm_set1_epi16(i);
+    return _mm_set1_epi32(i);
 }
 template<> inline __m128i WFAligner::SIMD<int32_t>::range() {
     static const __m128i r = _mm_setr_epi32(0, 1, 2, 3);
     return r;
+}
+template<> inline __m128i WFAligner::SIMD<int32_t>::eq(__m128i a, __m128i b) {
+    return _mm_cmpeq_epi32(a, b);
 }
 template<> inline __m128i WFAligner::SIMD<int32_t>::less(__m128i a, __m128i b) {
     return _mm_cmplt_epi32(a, b);
@@ -1324,10 +1432,10 @@ WFAligner::wavefront_align_core(const StringType& seq1, const StringType& seq2,
             break;
         }
         
-        
         wfs.emplace_back(wavefront_next<IntType>(seq1, seq2, wfs));
         
         wavefront_extend(seq1, seq2, wfs.back(), match_func);
+        
         if (Local) {
             find_local_opt(seq1, seq2, wfs.size() - 1, wfs.back(),
                            opt, opt_diag, opt_s, max_s);
@@ -1868,7 +1976,6 @@ void WFAligner::wavefront_align_recursive_internal(const StringType& seq1, const
             wf_buffer.emplace_back(wavefront_next<IntType>(seq1, seq2, wf_buffer));
             wavefront_extend(seq1, seq2, wf_buffer.back(), match_func);
             // prune lagging diagonals
-            // TODO: need to update this to Local when it's implemented
             wavefront_prune<Local>(wf_buffer.back());
             
             if (wf_buffer.size() == 2 * stripe_width) {
@@ -1983,7 +2090,6 @@ template<typename StringType, typename MatchFunc, typename IntType>
 inline void WFAligner::wavefront_extend(const StringType& seq1, const StringType& seq2,
                                         Wavefront<IntType>& wf, const MatchFunc& match_func) const {
     
-    // TODO: vectorize this
     for (int64_t k = 0; k < wf.size(); ++k) {
         int64_t diag = wf.diag_begin + k;
         int64_t anti_diag = wf.int_at(diag, MAT_M);
