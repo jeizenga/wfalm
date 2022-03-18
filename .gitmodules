@@ -1,3 +1,6 @@
 [submodule "external/sdsl-lite"]
 	path = external/sdsl-lite
 	url = https://github.com/xxsds/sdsl-lite.git
+[submodule "simde"]
+	path = simde
+	url = https://github.com/simd-everywhere/simde.git

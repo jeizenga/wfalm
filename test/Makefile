@@ -1,8 +1,9 @@
 CWD = $(shell pwd)
 INCDIR = $(CWD)/..
 SDSLDIR = $(CWD)/../external/sdsl-lite/include/
+SIMDEDIR = $(CWD)/../simde/
 CXX ?= g++
-CPPFLAGS = -std=c++14 -m64 -g -O3 -I$(INCDIR) -I$(SDSLDIR)
+CPPFLAGS = -std=c++14 -m64 -g -O3 -I$(INCDIR) -I$(SDSLDIR) -I$(SIMDEDIR)
 
 
 all: test benchmark

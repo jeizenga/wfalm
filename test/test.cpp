@@ -66,11 +66,15 @@ int score_cigar(const std::string& seq1, const std::string& seq2,
 
 int main(int argc, char** argv) {
     
-    // 0    2   3   4  6         7  8     11     12
-    //          *   *            *  *            *
-    // TACGGTCACCGCGACG-ACGACGGCAATTACTCCAAGTTGTCT
-    // TACGG-CACGGCGATGAACGACGGCACTTTCTCCA--TTGTCC
-    //                 ^2 placements for this
+    //  0    2   3    4  6        7  8     11     12
+    //           *    *           *  *            *
+    //  TACGGTCACCGCGACGA-CGACGGCAATTACTCCAAGTTGTCT
+    //  TACGG-CACGGCGATGAACGACGGCACTTTCTCCA--TTGTCC
+    //                   ^2 placements for this
+    // 0     1   1    2  3        5  5     67     8
+    //       1   9    9  4        2  8     90     2
+    //      1   1    2  3        5  5     66     88
+    //      0   7    7  3        0  6     89     02
     std::string seq1 = "TACGGTCACCGCGACGACGACGGCAATTACTCCAAGTTGTCT";
     std::string seq2 = "TACGGCACGGCGATGAACGACGGCACTTTCTCCATTGTCC";
     
@@ -78,7 +82,7 @@ int main(int argc, char** argv) {
     int gap_open = 1;
     int gap_extend = 1;
     int max_mem = 400;
-    std::cerr << "making aligner" << std::endl;
+
     wfalm::WFAligner aligner(mismatch, gap_open, gap_extend);
     wfalm::WFAlignerST aligner_st(mismatch, gap_open, gap_extend);
     
