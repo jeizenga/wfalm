@@ -380,82 +380,88 @@ protected:
             }
         }
         
-        inline void partial_vec_match(size_t& i, size_t& j, bool& found_mismatch,
-                                      const __m128i& vec1, const __m128i& vec2) const {
+        // sub-routine of the internal function that computes the length of the prefix match
+        // in the first 8 bytes of an equality mask vector
+        inline size_t partial_vec_match(const __m128i& eq) const {
             
-            __m128i eq = SIMD<int8_t>::eq(vec1, vec2);
-            // find the first 0 if there is one
-            __m128i pref = _mm_cvtepi8_epi16(eq);
+            // find the mismatch among the first 8 bytes if there is one
             __m128i pos = _mm_minpos_epu16(_mm_cvtepi8_epi16(eq));
-            if (_mm_extract_epi16(pos, 0) != 0) {
-                // there are no mismatches
-                i += 8;
-                j += 8;
-                pos = _mm_minpos_epu16(_mm_cvtepi8_epi16(_mm_alignr_epi8(SIMD<int8_t>::broadcast(0), eq, 8)));
-                found_mismatch = (_mm_extract_epi16(pos, 0) == 0);
-                if (found_mismatch) {
-                    size_t len = _mm_extract_epi16(pos, 1);
-                    i += len;
-                    j += len;
-                }
-                else {
-                    // there were still no mismatches
-                    i += 8;
-                    j += 8;
-                }
-            }
-            else {
-                size_t len = _mm_extract_epi16(pos, 1);
-                i += len;
-                j += len;
-                found_mismatch = true;
-            }
+            return _mm_extract_epi16(pos, 0) == 0 ? _mm_extract_epi16(pos, 1) : 8;
+
         }
         
         // a template-controlled generic function for the specializations to call
         template<bool Reversed>
         inline size_t match_func_internal(size_t i, size_t j) const {
+            // remember where we start from
             size_t init = i;
+            
+            // TODO: is it safe to make this execute within 8 bytes from the end since the first
+            // comparison is only of the first 8 bases anyway?
+            
+            // use vectorized operations to find matches if we can
             bool found_mismatch = false;
-            // do as much as we can with
             if (i + SIMD<int8_t>::vec_size() <= seq1.size() &&
                 j + SIMD<int8_t>::vec_size() <= seq2.size()) {
                 
-                // TODO: i could maybe load aligned after the first iteration, but most of these will probably
-                // be finished in only one call, and you can't guarantee alignment of both strings...
-                
-                // try to find a partial match of the first vector
+                // try to find a partial match of the first 8 bases
                 __m128i vec1, vec2;
                 load<Reversed>(i, j, vec1, vec2);
-                partial_vec_match(i, j, found_mismatch, vec1, vec2);
                 
+                __m128i eq = SIMD<int8_t>::eq(vec1, vec2);
+                
+                size_t match_len = partial_vec_match(eq);
+                i += match_len;
+                j += match_len;
+                               
+                found_mismatch = (match_len < 8);
                 if (!found_mismatch) {
-                    // we matched the whole vector, so now we transition into a cheaper matching of an entire vector
-                    // to move quickly in instances of very long matches
+                    // we matched the first 8 bases, so now we transition into a cheaper matching of an
+                    // entire vector to move quickly in instances of very long matches
+                    
+                    // TODO: i could maybe load aligned after the first iteration, but you can't guarantee
+                    // alignment of both strings...
+                    
                     while (i + SIMD<int8_t>::vec_size() <= seq1.size() &&
                            j + SIMD<int8_t>::vec_size() <= seq2.size()) {
                         
                         load<Reversed>(i, j, vec1, vec2);
+                        eq = SIMD<int8_t>::eq(vec1, vec2);
                         
-                        if (_mm_test_all_ones(SIMD<int8_t>::eq(vec1, vec2))) {
+                        if (_mm_test_all_ones(eq)) {
                             // we matched the entire vector
                             i += 16;
                             j += 16;
                         }
                         else {
                             // there's a mismatch in the vector somewhere
-                            // TODO: i could maybe re-use the eq vector...
-                            partial_vec_match(i, j, found_mismatch, vec1, vec2);
+                            match_len = partial_vec_match(eq);
+                            i += match_len;
+                            j += match_len;
+                            
+                            if (match_len < 8) {
+                                // the mismatch is after the first 8 bases, shift over and find it
+                                eq = _mm_alignr_epi8(SIMD<int8_t>::broadcast(0), eq, 8);
+                                match_len = partial_vec_match(eq);
+                                i += match_len;
+                                j += match_len;
+                            }
+                            found_mismatch = true;
                             break;
                         }
                     }
                 }
             }
-            // walk out any matches that were too close to the end of the sequence to use vectors
-            while (!found_mismatch && i < seq1.size() && j < seq2.size() && seq1[i] == seq2[j]) {
-                ++i;
-                ++j;
+            
+            if (!found_mismatch) {
+                // we got too close to the end of the sequences to do vectorized operations
+                // without finding a mismatch, finish out with
+                while (i < seq1.size() && j < seq2.size() && seq1[i] == seq2[j]) {
+                    ++i;
+                    ++j;
+                }
             }
+            
             return i - init;
         }
         
@@ -474,7 +480,8 @@ protected:
             int padded_len = SIMD<IntType>::round_up(len) + 2;
             alloced_len = 3 * padded_len;
             if (posix_memalign((void**)&alloced, sizeof(__m128i), alloced_len * sizeof(__m128i))) {
-                throw std::runtime_error(std::string("error:[WFAligner] could not perform aligned allocation of size " + std::to_string(alloced_len * sizeof(__m128i))).c_str());
+                throw std::runtime_error(std::string("error:[WFAligner] could not perform aligned allocation of size "
+                                                     + std::to_string(alloced_len * sizeof(__m128i))).c_str());
             }
             M = alloced + 1;
             I = M + padded_len;
@@ -644,7 +651,7 @@ protected:
                     I[k] = SIMD<IntType>::min_inf();
                     D[k] = SIMD<IntType>::min_inf();
                 }
-                            }
+            }
             
             if (_diag_begin != diag_begin) {
                 // we're pruning the left side
@@ -672,7 +679,6 @@ protected:
                 I = (__m128i*)(((IntType*) I) + diff);
                 D = (__m128i*)(((IntType*) D) + diff);
                 diag_begin = _diag_begin;
-
             }
             
             len = _size;
