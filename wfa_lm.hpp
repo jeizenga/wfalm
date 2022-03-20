@@ -439,7 +439,7 @@ protected:
                             i += match_len;
                             j += match_len;
                             
-                            if (match_len < 8) {
+                            if (match_len >= 8) {
                                 // the mismatch is after the first 8 bases, shift over and find it
                                 eq = _mm_alignr_epi8(SIMD<int8_t>::broadcast(0), eq, 8);
                                 match_len = partial_vec_match(eq);
