@@ -42,7 +42,8 @@ namespace wfalm {
  * algorithm based on a suffix tree to compute matches. In most cases, this is
  * slower than the default comparison-based match computation.
  */
-class WFAlignerST : public WFAligner {
+template<int NumPW>
+class WFAlignerST : public WFAligner<NumPW> {
     
 public:
     
@@ -67,7 +68,7 @@ public:
     /// behind the furthest-reaching diagonal. This can lead to suboptimal alignments,
     /// but it also can increase speed and reduce memory use. If set to a number < 0,
     /// no pruning is performed.
-    using WFAligner::lagging_diagonal_prune;
+    using WFAligner<NumPW>::lagging_diagonal_prune;
     
     /***********************
      *  Alignment methods  *
@@ -372,131 +373,132 @@ private:
     };
     
     // give the wrapper access to the dispatch function
-    friend class StandardGlobalWFA<STMatchFunc<StringView>, StringView>;
-    friend class StandardSemilocalWFA<STMatchFunc<RevStringView>, RevStringView>;
-    friend class LowMemGlobalWFA<STMatchFunc<StringView>, StringView>;
-    friend class LowMemSemilocalWFA<STMatchFunc<RevStringView>, RevStringView>;
-    friend class RecursiveGlobalWFA<STMatchFunc<StringView>, StringView>;
-    friend class RecursiveSemilocalWFA<STMatchFunc<RevStringView>, RevStringView>;
-    friend class AdaptiveGlobalWFA<STMatchFunc<StringView>, StringView>;
-    friend class AdaptiveSemilocalWFA<STMatchFunc<RevStringView>, RevStringView>;
+    friend class WFAligner<NumPW>::StandardGlobalWFA<STMatchFunc<StringView>, StringView>;
+    friend class WFAligner<NumPW>::StandardSemilocalWFA<STMatchFunc<RevStringView>, RevStringView>;
+    friend class WFAligner<NumPW>::LowMemGlobalWFA<STMatchFunc<StringView>, StringView>;
+    friend class WFAligner<NumPW>::LowMemSemilocalWFA<STMatchFunc<RevStringView>, RevStringView>;
+    friend class WFAligner<NumPW>::RecursiveGlobalWFA<STMatchFunc<StringView>, StringView>;
+    friend class WFAligner<NumPW>::RecursiveSemilocalWFA<STMatchFunc<RevStringView>, RevStringView>;
+    friend class WFAligner<NumPW>::AdaptiveGlobalWFA<STMatchFunc<StringView>, StringView>;
+    friend class WFAligner<NumPW>::AdaptiveSemilocalWFA<STMatchFunc<RevStringView>, RevStringView>;
     
 };
 
-WFAlignerST::WFAlignerST() : WFAligner() {}
+template<int NumPW>
+WFAlignerST<NumPW>::WFAlignerST() : WFAligner<NumPW>() {}
 
-WFAlignerST::WFAlignerST(uint32_t mismatch, uint32_t gap_open, uint32_t gap_extend)
-    : WFAligner(mismatch, gap_open, gap_extend)
+template<int NumPW>
+WFAlignerST<NumPW>::WFAlignerST(uint32_t mismatch, uint32_t gap_open, uint32_t gap_extend)
+    : WFAligner<NumPW>(mismatch, gap_open, gap_extend)
 {
     // only need to delegate to WFAligner
 }
 
-WFAlignerST::WFAlignerST(uint32_t match, uint32_t mismatch, uint32_t gap_open, uint32_t gap_extend)
-    : WFAligner(match, mismatch, gap_open, gap_extend)
+template<int NumPW>
+WFAlignerST<NumPW>::WFAlignerST(uint32_t match, uint32_t mismatch, uint32_t gap_open, uint32_t gap_extend)
+    : WFAligner<NumPW>(match, mismatch, gap_open, gap_extend)
 {
     // only need to delegate to WFAligner
 }
 
+template<int NumPW>
 inline std::pair<std::vector<CIGAROp>, int32_t>
-WFAlignerST::wavefront_align(const char* seq1, size_t len1,
+WFAlignerST<NumPW>::wavefront_align(const char* seq1, size_t len1,
                              const char* seq2, size_t len2) const {
     StringView str1(seq1, 0, len1);
     StringView str2(seq2, 0, len2);
-    return wavefront_dispatch<false, StdMem, STMatchFunc<StringView>>(str1, str2,
+    return WFAligner<NumPW>::template wavefront_dispatch<false, WFAligner<NumPW>::StdMem, STMatchFunc<StringView>>(str1, str2,
                                                                       std::numeric_limits<uint64_t>::max());
 }
 
-
+template<int NumPW>
 inline std::pair<std::vector<CIGAROp>, int32_t>
-WFAlignerST::wavefront_align_low_mem(const char* seq1, size_t len1,
+WFAlignerST<NumPW>::wavefront_align_low_mem(const char* seq1, size_t len1,
                                    const char* seq2, size_t len2) const {
     StringView str1(seq1, 0, len1);
     StringView str2(seq2, 0, len2);
-    return wavefront_dispatch<false, LowMem, STMatchFunc<StringView>>(str1, str2,
+    return WFAligner<NumPW>::template wavefront_dispatch<false, WFAligner<NumPW>::LowMem, STMatchFunc<StringView>>(str1, str2,
                                                                       std::numeric_limits<uint64_t>::max());
 }
 
-
+template<int NumPW>
 inline std::pair<std::vector<CIGAROp>, int32_t>
-WFAlignerST::wavefront_align_recursive(const char* seq1, size_t len1,
+WFAlignerST<NumPW>::wavefront_align_recursive(const char* seq1, size_t len1,
                                      const char* seq2, size_t len2) const {
     StringView str1(seq1, 0, len1);
     StringView str2(seq2, 0, len2);
-    return wavefront_dispatch<false, Recursive, STMatchFunc<StringView>>(str1, str2,
+    return WFAligner<NumPW>::template wavefront_dispatch<false, WFAligner<NumPW>::Recursive, STMatchFunc<StringView>>(str1, str2,
                                                                          std::numeric_limits<uint64_t>::max());
 }
 
-
-
+template<int NumPW>
 inline std::pair<std::vector<CIGAROp>, int32_t>
-WFAlignerST::wavefront_align_adaptive(const char* seq1, size_t len1,
+WFAlignerST<NumPW>::wavefront_align_adaptive(const char* seq1, size_t len1,
                                       const char* seq2, size_t len2,
                                       uint64_t max_mem) const {
     StringView str1(seq1, 0, len1);
     StringView str2(seq2, 0, len2);
-    return wavefront_dispatch<false, AdaptiveMem, STMatchFunc<StringView>>(str1, str2, max_mem);
+    return WFAligner<NumPW>::template wavefront_dispatch<false, WFAligner<NumPW>::AdaptiveMem, STMatchFunc<StringView>>(str1, str2, max_mem);
 }
 
+template<int NumPW>
 inline std::tuple<std::vector<CIGAROp>, int32_t, std::pair<size_t, size_t>, std::pair<size_t, size_t>>
-WFAlignerST::wavefront_align_local(const char* seq1, size_t len1,
+WFAlignerST<NumPW>::wavefront_align_local(const char* seq1, size_t len1,
                                  const char* seq2, size_t len2,
                                  size_t anchor_begin_1, size_t anchor_end_1,
                                  size_t anchor_begin_2, size_t anchor_end_2,
                                  bool anchor_is_match) const {
     
     // configure the alignment and match functions
-    typedef StandardSemilocalWFA<STMatchFunc<RevStringView>, RevStringView> PrefWFA;
-    typedef StandardGlobalWFA<STMatchFunc<StringView>, StringView> AnchorWFA;
-    typedef StandardSemilocalWFA<STMatchFunc<StringView>, StringView> SuffWFA;
     
-    return wavefront_align_local_core<PrefWFA, AnchorWFA, SuffWFA>(seq1, len1, seq2, len2,
-                                                                   std::numeric_limits<uint64_t>::max(),
-                                                                   anchor_begin_1, anchor_end_1,
-                                                                   anchor_begin_2, anchor_end_2,
-                                                                   anchor_is_match);
+    return WFAligner<NumPW>::template wavefront_align_local_core<
+            WFAligner<NumPW>::template StandardSemilocalWFA<STMatchFunc<RevStringView>, RevStringView>,
+            WFAligner<NumPW>::template StandardGlobalWFA<STMatchFunc<StringView>, StringView>,
+            WFAligner<NumPW>::template StandardSemilocalWFA<STMatchFunc<StringView>, StringView>>
+        (seq1, len1, seq2, len2, std::numeric_limits<uint64_t>::max(),
+         anchor_begin_1, anchor_end_1, anchor_begin_2, anchor_end_2, anchor_is_match);
 }
 
+template<int NumPW>
 inline std::tuple<std::vector<CIGAROp>, int32_t, std::pair<size_t, size_t>, std::pair<size_t, size_t>>
-WFAlignerST::wavefront_align_local_low_mem(const char* seq1, size_t len1,
+WFAlignerST<NumPW>::wavefront_align_local_low_mem(const char* seq1, size_t len1,
                                          const char* seq2, size_t len2,
                                          size_t anchor_begin_1, size_t anchor_end_1,
                                          size_t anchor_begin_2, size_t anchor_end_2,
                                          bool anchor_is_match) const {
     
     // configure the alignment and match functions
-    typedef LowMemSemilocalWFA<STMatchFunc<RevStringView>, RevStringView> PrefWFA;
-    typedef LowMemGlobalWFA<STMatchFunc<StringView>, StringView> AnchorWFA;
-    typedef LowMemSemilocalWFA<STMatchFunc<StringView>, StringView> SuffWFA;
     
-    return wavefront_align_local_core<PrefWFA, AnchorWFA, SuffWFA>(seq1, len1, seq2, len2,
-                                                                   std::numeric_limits<uint64_t>::max(),
-                                                                   anchor_begin_1, anchor_end_1,
-                                                                   anchor_begin_2, anchor_end_2,
-                                                                   anchor_is_match);
+    return WFAligner<NumPW>::template wavefront_align_local_core<
+            WFAligner<NumPW>::template LowMemSemilocalWFA<STMatchFunc<RevStringView>, RevStringView>,
+            WFAligner<NumPW>::template LowMemGlobalWFA<STMatchFunc<StringView>, StringView>,
+            WFAligner<NumPW>::template LowMemSemilocalWFA<STMatchFunc<StringView>, StringView>>
+        (seq1, len1, seq2, len2, std::numeric_limits<uint64_t>::max(),
+         anchor_begin_1, anchor_end_1, anchor_begin_2, anchor_end_2, anchor_is_match);
 }
 
+template<int NumPW>
 inline std::tuple<std::vector<CIGAROp>, int32_t, std::pair<size_t, size_t>, std::pair<size_t, size_t>>
-WFAlignerST::wavefront_align_local_recursive(const char* seq1, size_t len1,
+WFAlignerST<NumPW>::wavefront_align_local_recursive(const char* seq1, size_t len1,
                                              const char* seq2, size_t len2,
                                              size_t anchor_begin_1, size_t anchor_end_1,
                                              size_t anchor_begin_2, size_t anchor_end_2,
                                              bool anchor_is_match) const {
     
     // configure the alignment and match functions
-    typedef RecursiveSemilocalWFA<STMatchFunc<RevStringView>, RevStringView> PrefWFA;
-    typedef RecursiveGlobalWFA<STMatchFunc<StringView>, StringView> AnchorWFA;
-    typedef RecursiveSemilocalWFA<STMatchFunc<StringView>, StringView> SuffWFA;
     
-    return wavefront_align_local_core<PrefWFA, AnchorWFA, SuffWFA>(seq1, len1, seq2, len2,
-                                                                   std::numeric_limits<uint64_t>::max(),
-                                                                   anchor_begin_1, anchor_end_1,
-                                                                   anchor_begin_2, anchor_end_2,
-                                                                   anchor_is_match);
+    return WFAligner<NumPW>::template wavefront_align_local_core<
+            WFAligner<NumPW>::template RecursiveSemilocalWFA<STMatchFunc<RevStringView>, RevStringView>,
+            WFAligner<NumPW>::template RecursiveGlobalWFA<STMatchFunc<StringView>, StringView>,
+            WFAligner<NumPW>::template RecursiveSemilocalWFA<STMatchFunc<StringView>, StringView>>
+        (seq1, len1, seq2, len2, std::numeric_limits<uint64_t>::max(),
+         anchor_begin_1, anchor_end_1, anchor_begin_2, anchor_end_2, anchor_is_match);
 
 }
 
+template<int NumPW>
 inline std::tuple<std::vector<CIGAROp>, int32_t, std::pair<size_t, size_t>, std::pair<size_t, size_t>>
-WFAlignerST::wavefront_align_local_recursive(const char* seq1, size_t len1,
+WFAlignerST<NumPW>::wavefront_align_local_recursive(const char* seq1, size_t len1,
                                              const char* seq2, size_t len2,
                                              uint64_t max_mem,
                                              size_t anchor_begin_1, size_t anchor_end_1,
@@ -504,14 +506,13 @@ WFAlignerST::wavefront_align_local_recursive(const char* seq1, size_t len1,
                                              bool anchor_is_match) const {
     
     // configure the alignment and match functions
-    typedef RecursiveSemilocalWFA<STMatchFunc<RevStringView>, RevStringView> PrefWFA;
-    typedef RecursiveGlobalWFA<STMatchFunc<StringView>, StringView> AnchorWFA;
-    typedef RecursiveSemilocalWFA<STMatchFunc<StringView>, StringView> SuffWFA;
     
-    return wavefront_align_local_core<PrefWFA, AnchorWFA, SuffWFA>(seq1, len1, seq2, len2, max_mem,
-                                                                   anchor_begin_1, anchor_end_1,
-                                                                   anchor_begin_2, anchor_end_2,
-                                                                   anchor_is_match);
+    return WFAligner<NumPW>::template wavefront_align_local_core<
+            WFAligner<NumPW>::template RecursiveSemilocalWFA<STMatchFunc<RevStringView>, RevStringView>,
+            WFAligner<NumPW>::template RecursiveGlobalWFA<STMatchFunc<StringView>, StringView>,
+            WFAligner<NumPW>::template RecursiveSemilocalWFA<STMatchFunc<StringView>, StringView>>
+        (seq1, len1, seq2, len2, max_mem,
+         anchor_begin_1, anchor_end_1, anchor_begin_2, anchor_end_2, anchor_is_match);
     
 }
 

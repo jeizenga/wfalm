@@ -42,6 +42,13 @@
 
 namespace wfalm {
 
+// A few forward declarations (users can ignore these)
+class FwdCompareMatchFunc;
+class RevCompareMatchFunc;
+class StringView;
+class RevStringView;
+
+
 /*
  * Operation in a CIGAR string (as defined in SAM format specification)
  */
@@ -58,6 +65,7 @@ struct CIGAROp {
  * The aligner objects are relatively lightweight and can be constructed for
  * single-use with limited overhead.
  */
+template<int NumPW>
 class WFAligner {
     
 public:
@@ -300,434 +308,9 @@ protected:
     static const int Recursive = 2;
     static const int AdaptiveMem = 3;
     
+    // forward declaration
+    template<typename IntType> struct Wavefront;
     
-    /*
-     * Adapter to avoid string copying for when aligning subintervals
-     */
-    class StringView {
-    public:
-        StringView(const char* seq, size_t i, size_t len) : seq(seq + i), len(len)
-        {
-            
-        }
-        
-        inline const char& operator[](size_t idx) const {
-            return seq[idx];
-        }
-        
-        inline size_t size() const {
-            return len;
-        }
-        
-    private:
-        
-        const char* seq;
-        size_t len;
-    };
-    
-    /*
-     * Adapter to avoid string copying for when aligning subintervals
-     * that also reverses the string
-     */
-    class RevStringView {
-    public:
-        // note: interval is provided in forward direction
-        RevStringView(const char* seq, size_t i, size_t len) : seql(seq + i + len - 1), len(len)
-        {
-            
-        }
-        
-        inline const char& operator[](size_t idx) const {
-            return *(seql - idx);
-        }
-        
-        inline size_t size() const {
-            return len;
-        }
-        
-    private:
-        
-        // last char in the seq
-        const char* seql;
-        size_t len;
-    };
-    
-    // a match-computing function based on direct character comparison
-    template<typename StringType>
-    struct CompareMatchFunc {
-        CompareMatchFunc(const StringType& seq1, const StringType& seq2)
-            : seq1(seq1), seq2(seq2)
-        {
-            
-        }
-        
-        // leave the actual implementation to the template specializations
-        inline size_t operator()(size_t i, size_t j) const;
-        
-    protected:
-        
-        template<bool Reversed>
-        inline void load(size_t i, size_t j, __m128i& vec1, __m128i& vec2) const {
-            if (Reversed) {
-                static const __m128i reverser = _mm_setr_epi8(15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0);
-                vec1 = _mm_shuffle_epi8(SIMD<int8_t>::load_unaligned((__m128i const*)(&seq1[i] - sizeof(__m128i) + 1)), reverser);
-                vec2 = _mm_shuffle_epi8(SIMD<int8_t>::load_unaligned((__m128i const*)(&seq2[j] - sizeof(__m128i) + 1)), reverser);
-                
-            }
-            else {
-                vec1 = SIMD<int8_t>::load_unaligned((__m128i const*)&seq1[i]);
-                vec2 = SIMD<int8_t>::load_unaligned((__m128i const*)&seq2[j]);
-            }
-        }
-        
-        // sub-routine of the internal function that computes the length of the prefix match
-        // in the first 8 bytes of an equality mask vector
-        inline size_t partial_vec_match(const __m128i& eq) const {
-            
-            // find the mismatch among the first 8 bytes if there is one
-            __m128i pos = _mm_minpos_epu16(_mm_cvtepi8_epi16(eq));
-            return _mm_extract_epi16(pos, 0) == 0 ? _mm_extract_epi16(pos, 1) : 8;
-
-        }
-        
-        // a template-controlled generic function for the specializations to call
-        template<bool Reversed>
-        inline size_t match_func_internal(size_t i, size_t j) const {
-            // remember where we start from
-            size_t init = i;
-            
-            // TODO: is it safe to make this execute within 8 bytes from the end since the first
-            // comparison is only of the first 8 bases anyway?
-            
-            // use vectorized operations to find matches if we can
-            bool found_mismatch = false;
-            if (i + SIMD<int8_t>::vec_size() <= seq1.size() &&
-                j + SIMD<int8_t>::vec_size() <= seq2.size()) {
-                
-                // try to find a partial match of the first 8 bases
-                __m128i vec1, vec2;
-                load<Reversed>(i, j, vec1, vec2);
-                
-                __m128i eq = SIMD<int8_t>::eq(vec1, vec2);
-                
-                size_t match_len = partial_vec_match(eq);
-                i += match_len;
-                j += match_len;
-                               
-                found_mismatch = (match_len < 8);
-                if (!found_mismatch) {
-                    // we matched the first 8 bases, so now we transition into a cheaper matching of an
-                    // entire vector to move quickly in instances of very long matches
-                    
-                    // TODO: i could maybe load aligned after the first iteration, but you can't guarantee
-                    // alignment of both strings...
-                    
-                    while (i + SIMD<int8_t>::vec_size() <= seq1.size() &&
-                           j + SIMD<int8_t>::vec_size() <= seq2.size()) {
-                        
-                        load<Reversed>(i, j, vec1, vec2);
-                        eq = SIMD<int8_t>::eq(vec1, vec2);
-                        
-                        if (_mm_test_all_ones(eq)) {
-                            // we matched the entire vector
-                            i += 16;
-                            j += 16;
-                        }
-                        else {
-                            // there's a mismatch in the vector somewhere
-                            match_len = partial_vec_match(eq);
-                            i += match_len;
-                            j += match_len;
-                            
-                            if (match_len >= 8) {
-                                // the mismatch is after the first 8 bases, shift over and find it
-                                eq = _mm_alignr_epi8(SIMD<int8_t>::broadcast(0), eq, 8);
-                                match_len = partial_vec_match(eq);
-                                i += match_len;
-                                j += match_len;
-                            }
-                            found_mismatch = true;
-                            break;
-                        }
-                    }
-                }
-            }
-            
-            if (!found_mismatch) {
-                // we got too close to the end of the sequences to do vectorized operations
-                // without finding a mismatch, finish out with
-                while (i < seq1.size() && j < seq2.size() && seq1[i] == seq2[j]) {
-                    ++i;
-                    ++j;
-                }
-            }
-            
-            return i - init;
-        }
-        
-        const StringType& seq1;
-        const StringType& seq2;
-    };
-    
-    
-    template<typename IntType>
-    struct Wavefront {
-        
-    private:
-        
-        inline void init_arrays() {
-            // we pad the array with a full vector on each end to handle boundary conditions
-            int padded_len = SIMD<IntType>::round_up(len) + 2;
-            alloced_len = 3 * padded_len;
-            if (posix_memalign((void**)&alloced, sizeof(__m128i), alloced_len * sizeof(__m128i))) {
-                throw std::runtime_error(std::string("error:[WFAligner] could not perform aligned allocation of size "
-                                                     + std::to_string(alloced_len * sizeof(__m128i))).c_str());
-            }
-            M = alloced + 1;
-            I = M + padded_len;
-            D = I + padded_len;
-        }
-    public:
-        
-        
-        Wavefront() {}
-        Wavefront(int32_t diag_begin, int32_t diag_end)
-            : diag_begin(diag_begin), len(diag_end - diag_begin)
-        {
-            init_arrays();
-            for (int32_t i = 0; i < alloced_len; ++i) {
-                // TODO: i might be able to get away with only setting the
-                // shoulders now that the ifelse condition in DP assigns -infinity
-                alloced[i] = SIMD<IntType>::min_inf();
-            }
-        }
-        
-        inline Wavefront& operator=(const Wavefront& other) noexcept {
-            if (this != &other) {
-                diag_begin = other.diag_begin;
-                len = other.len;
-                init_arrays();
-                int unpadded_len = alloced_len / 3 - 2;
-                
-                // set the boundaries
-                *(M - 1) = SIMD<IntType>::min_inf();
-                *(M + unpadded_len) = SIMD<IntType>::min_inf();
-                *(I - 1) = SIMD<IntType>::min_inf();
-                *(I + unpadded_len) = SIMD<IntType>::min_inf();
-                *(D - 1) = SIMD<IntType>::min_inf();
-                *(D + unpadded_len) = SIMD<IntType>::min_inf();
-                
-                // copy the interior of the array
-                if (SIMD<IntType>::is_aligned(other.M)) {
-                    // the arrays are aligned
-                    for (int32_t i = 0; i < unpadded_len; ++i) {
-                        M[i] = other.M[i];
-                        I[i] = other.I[i];
-                        D[i] = other.D[i];
-                    }
-                }
-                else {
-                    // the other arrays are not aligned
-                    for (int32_t i = 0; i < unpadded_len; ++i) {
-                        M[i] = _mm_loadu_si128(other.M + i);
-                        I[i] = _mm_loadu_si128(other.I + i);
-                        D[i] = _mm_loadu_si128(other.D + i);
-                    }
-                }
-            }
-            return *this;
-        }
-        
-        inline Wavefront& operator=(Wavefront&& other) noexcept {
-            if (this != &other) {
-                diag_begin = other.diag_begin;
-                len = other.len;
-                alloced_len = other.alloced_len;
-                if (alloced) {
-                    free(alloced);
-                }
-                alloced = other.alloced;
-                M = other.M;
-                I = other.I;
-                D = other.D;
-                
-                // TODO: i could probably get away with only resetting the
-                // alloc'ed pointer...
-                other.alloced = other.M = other.I = other.D = nullptr;
-                other.len = 0;
-                other.alloced_len = 0;
-            }
-            return *this;
-        }
-        
-        Wavefront(const Wavefront& other) noexcept {
-            *this = other;
-        }
-        
-        Wavefront(Wavefront&& other) noexcept {
-            *this = std::move(other);
-        }
-        
-        ~Wavefront() {
-            free(alloced);
-        }
-        
-        inline __m128i* vector_at(int32_t diag, WFMatrix_t mat) {
-            switch (mat) {
-                case MAT_M:
-                    return (__m128i*)(((IntType*) M) + (diag - diag_begin));
-                    
-                case MAT_I:
-                    return (__m128i*)(((IntType*) I) + (diag - diag_begin));
-                    
-                case MAT_D:
-                    return (__m128i*)(((IntType*) D) + (diag - diag_begin));
-            }
-        }
-        
-        inline const __m128i* vector_at(int32_t diag, WFMatrix_t mat) const {
-            switch (mat) {
-                case MAT_M:
-                    return (__m128i*)(((IntType*) M) + (diag - diag_begin));
-                    
-                case MAT_I:
-                    return (__m128i*)(((IntType*) I) + (diag - diag_begin));
-                    
-                case MAT_D:
-                    return (__m128i*)(((IntType*) D) + (diag - diag_begin));
-            }
-        }
-        
-        inline IntType& int_at(int32_t diag, WFMatrix_t mat) {
-            switch (mat) {
-                case MAT_M:
-                    return *(((IntType*) M) + (diag - diag_begin));
-                    
-                case MAT_I:
-                    return *(((IntType*) I) + (diag - diag_begin));
-                    
-                case MAT_D:
-                    return *(((IntType*) D) + (diag - diag_begin));
-            }
-        }
-        
-        inline const IntType& int_at(int32_t diag, WFMatrix_t mat) const {
-            switch (mat) {
-                case MAT_M:
-                    return *(((IntType*) M) + (diag - diag_begin));
-                    
-                case MAT_I:
-                    return *(((IntType*) I) + (diag - diag_begin));
-                    
-                case MAT_D:
-                    return *(((IntType*) D) + (diag - diag_begin));
-            }
-        }
-        
-        // warning: assumes that this interval is contained within the current one
-        // and that the vectors are currently aligned (i.e. should only be called
-        // once during wf_prune)
-        // it also might not work if pruning to size 0, but we don't need that
-        inline void resize(int32_t _diag_begin, int32_t _size) {
-            if (_diag_begin + _size != diag_begin + len) {
-                // we're pruning the right side
-                
-                // blend the right transition
-                int32_t k = SIMD<IntType>::round_down(_diag_begin + _size - diag_begin - 1);
-                __m128i mask = SIMD<IntType>::less(SIMD<IntType>::add(SIMD<IntType>::broadcast(diag_begin +
-                                                                                               k * SIMD<IntType>::vec_size()),
-                                                                      SIMD<IntType>::range()),
-                                                   SIMD<IntType>::broadcast(_diag_begin + _size));
-                
-                
-                M[k] = SIMD<IntType>::ifelse(mask, M[k], SIMD<IntType>::min_inf());
-                I[k] = SIMD<IntType>::ifelse(mask, I[k], SIMD<IntType>::min_inf());
-                D[k] = SIMD<IntType>::ifelse(mask, D[k], SIMD<IntType>::min_inf());
-                
-                // copy full -infinity vectors
-                ++k;
-                for (int32_t n = SIMD<IntType>::round_up(diag_begin + len); k < n; ++k) {
-                    M[k] = SIMD<IntType>::min_inf();
-                    I[k] = SIMD<IntType>::min_inf();
-                    D[k] = SIMD<IntType>::min_inf();
-                }
-            }
-            
-            if (_diag_begin != diag_begin) {
-                // we're pruning the left side
-                
-                // copy full -infinity vectors
-                int32_t k = 0;
-                for (int32_t n = SIMD<IntType>::round_down(_diag_begin - diag_begin); k < n; ++k) {
-                    M[k] = SIMD<IntType>::min_inf();
-                    I[k] = SIMD<IntType>::min_inf();
-                    D[k] = SIMD<IntType>::min_inf();
-                }
-                // blend the left transition
-                __m128i mask = SIMD<IntType>::less(SIMD<IntType>::add(SIMD<IntType>::broadcast(diag_begin +
-                                                                                               k * SIMD<IntType>::vec_size()),
-                                                                      SIMD<IntType>::range()),
-                                                   SIMD<IntType>::broadcast(_diag_begin));
-                
-                M[k] = SIMD<IntType>::ifelse(mask, SIMD<IntType>::min_inf(), M[k]);
-                I[k] = SIMD<IntType>::ifelse(mask, SIMD<IntType>::min_inf(), I[k]);
-                D[k] = SIMD<IntType>::ifelse(mask, SIMD<IntType>::min_inf(), D[k]);
-                
-                // update the pointers
-                int32_t diff = _diag_begin - diag_begin;
-                M = (__m128i*)(((IntType*) M) + diff);
-                I = (__m128i*)(((IntType*) I) + diff);
-                D = (__m128i*)(((IntType*) D) + diff);
-                diag_begin = _diag_begin;
-            }
-            
-            len = _size;
-        }
-        
-        inline int64_t size() const {
-            return len;
-        }
-        
-        inline bool empty() const {
-            return len == 0;
-        }
-        
-        inline uint64_t bytes() {
-            return sizeof(__m128i) * alloced_len;
-        }
-        
-        inline void print(std::ostream& strm) {
-            int n = alloced_len / 3;
-            for (int i = 0, j = 0; i < 3; ++i) {
-                for (int k = 0; k < n; ++k, ++j) {
-                    if (k) {
-                        strm << "\t";
-                    }
-                    IntType* v = (IntType*) &alloced[j];
-                    strm << "(";
-                    for (int l = 0; l < SIMD<IntType>::vec_size(); ++l) {
-                        if (l) {
-                            strm << "\t";
-                        }
-                        strm << (int) v[l];
-                    }
-                    strm << ")";
-                }
-                strm << std::endl;
-            }
-        }
-        
-        __m128i* alloced = nullptr;
-        __m128i* M = nullptr;
-        __m128i* I = nullptr;
-        __m128i* D = nullptr;
-        
-        int32_t diag_begin = 0;
-        // in number of integers
-        int32_t len = 0;
-        // in number of vectors
-        int32_t alloced_len = 0;
-    };
     
     
     /*
@@ -755,158 +338,104 @@ protected:
      */
     template<typename MatchFunc, typename StringType>
     struct StandardGlobalWFA {
-        StandardGlobalWFA(const WFAligner* aligner, uint64_t max_mem) : aligner(aligner) {}
+        StandardGlobalWFA(const WFAligner<NumPW>* aligner, uint64_t max_mem) : aligner(aligner) {}
         
         inline std::pair<std::vector<CIGAROp>, int32_t>
         operator()(const StringType& seq1, const StringType& seq2) const {
-            return aligner->wavefront_dispatch<false, WFAligner::StdMem, MatchFunc, StringType>(seq1, seq2,
+            return aligner->wavefront_dispatch<false, WFAligner<NumPW>::StdMem, MatchFunc, StringType>(seq1, seq2,
                                                                                                 std::numeric_limits<uint64_t>::max());
         }
-        const WFAligner* aligner = nullptr;
+        const WFAligner<NumPW>* aligner = nullptr;
     };
     template<typename MatchFunc, typename StringType>
     struct StandardSemilocalWFA {
-        StandardSemilocalWFA(const WFAligner* aligner, uint64_t max_mem) : aligner(aligner) {}
+        StandardSemilocalWFA(const WFAligner<NumPW>* aligner, uint64_t max_mem) : aligner(aligner) {}
         
         inline std::pair<std::vector<CIGAROp>, int32_t>
         operator()(const StringType& seq1, const StringType& seq2) const {
-            return aligner->wavefront_dispatch<true, WFAligner::StdMem, MatchFunc, StringType>(seq1, seq2,
+            return aligner->wavefront_dispatch<true, WFAligner<NumPW>::StdMem, MatchFunc, StringType>(seq1, seq2,
                                                                                                std::numeric_limits<uint64_t>::max());
         }
-        const WFAligner* aligner = nullptr;
+        const WFAligner<NumPW>* aligner = nullptr;
     };
     template<typename MatchFunc, typename StringType>
     struct LowMemGlobalWFA {
-        LowMemGlobalWFA(const WFAligner* aligner, uint64_t max_mem) : aligner(aligner) {}
+        LowMemGlobalWFA(const WFAligner<NumPW>* aligner, uint64_t max_mem) : aligner(aligner) {}
         
         inline std::pair<std::vector<CIGAROp>, int32_t>
         operator()(const StringType& seq1, const StringType& seq2) const {
-            return aligner->wavefront_dispatch<false, WFAligner::LowMem, MatchFunc, StringType>(seq1, seq2,
+            return aligner->wavefront_dispatch<false, WFAligner<NumPW>::LowMem, MatchFunc, StringType>(seq1, seq2,
                                                                                                 std::numeric_limits<uint64_t>::max());
         }
-        const WFAligner* aligner = nullptr;
+        const WFAligner<NumPW>* aligner = nullptr;
     };
     template<typename MatchFunc, typename StringType>
     struct LowMemSemilocalWFA {
-        LowMemSemilocalWFA(const WFAligner* aligner, uint64_t max_mem) : aligner(aligner) {}
+        LowMemSemilocalWFA(const WFAligner<NumPW>* aligner, uint64_t max_mem) : aligner(aligner) {}
         
         inline std::pair<std::vector<CIGAROp>, int32_t>
         operator()(const StringType& seq1, const StringType& seq2) const {
-            return aligner->wavefront_dispatch<true, WFAligner::LowMem, MatchFunc, StringType>(seq1, seq2,
+            return aligner->wavefront_dispatch<true, WFAligner<NumPW>::LowMem, MatchFunc, StringType>(seq1, seq2,
                                                                                                std::numeric_limits<uint64_t>::max());
         }
-        const WFAligner* aligner = nullptr;
+        const WFAligner<NumPW>* aligner = nullptr;
     };
     template<typename MatchFunc, typename StringType>
     struct RecursiveGlobalWFA {
-        RecursiveGlobalWFA(const WFAligner* aligner, uint64_t max_mem) : aligner(aligner) {}
+        RecursiveGlobalWFA(const WFAligner<NumPW>* aligner, uint64_t max_mem) : aligner(aligner) {}
         
         inline std::pair<std::vector<CIGAROp>, int32_t>
         operator()(const StringType& seq1, const StringType& seq2) const {
-            return aligner->wavefront_dispatch<false, WFAligner::Recursive, MatchFunc, StringType>(seq1, seq2,
+            return aligner->wavefront_dispatch<false, WFAligner<NumPW>::Recursive, MatchFunc, StringType>(seq1, seq2,
                                                                                                    std::numeric_limits<uint64_t>::max());
         }
-        const WFAligner* aligner = nullptr;
+        const WFAligner<NumPW>* aligner = nullptr;
     };
     template<typename MatchFunc, typename StringType>
     struct RecursiveSemilocalWFA {
-        RecursiveSemilocalWFA(const WFAligner* aligner, uint64_t max_mem) : aligner(aligner) {}
+        RecursiveSemilocalWFA(const WFAligner<NumPW>* aligner, uint64_t max_mem) : aligner(aligner) {}
         
         inline std::pair<std::vector<CIGAROp>, int32_t>
         operator()(const StringType& seq1, const StringType& seq2) const {
-            return aligner->wavefront_dispatch<true, WFAligner::Recursive, MatchFunc, StringType>(seq1, seq2,
+            return aligner->wavefront_dispatch<true, WFAligner<NumPW>::Recursive, MatchFunc, StringType>(seq1, seq2,
                                                                                                   std::numeric_limits<uint64_t>::max());
         }
-        const WFAligner* aligner = nullptr;
+        const WFAligner<NumPW>* aligner = nullptr;
     };
     template<typename MatchFunc, typename StringType>
     struct AdaptiveGlobalWFA {
-        AdaptiveGlobalWFA(const WFAligner* aligner, uint64_t max_mem) : aligner(aligner), max_mem(max_mem) {}
+        AdaptiveGlobalWFA(const WFAligner<NumPW>* aligner, uint64_t max_mem) : aligner(aligner), max_mem(max_mem) {}
         
         inline std::pair<std::vector<CIGAROp>, int32_t>
         operator()(const StringType& seq1, const StringType& seq2) const {
-            return aligner->wavefront_dispatch<false, WFAligner::AdaptiveMem, MatchFunc, StringType>(seq1, seq2,
+            return aligner->wavefront_dispatch<false, WFAligner<NumPW>::AdaptiveMem, MatchFunc, StringType>(seq1, seq2,
                                                                                                      max_mem);
         }
-        const WFAligner* aligner = nullptr;
+        const WFAligner<NumPW>* aligner = nullptr;
         uint64_t max_mem = 0;
     };
     template<typename MatchFunc, typename StringType>
     struct AdaptiveSemilocalWFA {
-        AdaptiveSemilocalWFA(const WFAligner* aligner, uint64_t max_mem) : aligner(aligner), max_mem(max_mem) {}
+        AdaptiveSemilocalWFA(const WFAligner<NumPW>* aligner, uint64_t max_mem) : aligner(aligner), max_mem(max_mem) {}
         
         inline std::pair<std::vector<CIGAROp>, int32_t>
         operator()(const StringType& seq1, const StringType& seq2) const {
-            return aligner->wavefront_dispatch<true, WFAligner::AdaptiveMem, MatchFunc, StringType>(seq1, seq2,
+            return aligner->wavefront_dispatch<true, WFAligner<NumPW>::AdaptiveMem, MatchFunc, StringType>(seq1, seq2,
                                                                                                     max_mem);
         }
-        const WFAligner* aligner = nullptr;
+        const WFAligner<NumPW>* aligner = nullptr;
         uint64_t max_mem = 0;
     };
     
-    /*
-     * templated SIMD operations by integer width
-     */
-    template<typename IntType>
-    struct SIMD {
-        static inline int vec_size() {
-            return sizeof(__m128i) / sizeof(IntType);
-        }
-        static inline int round_up(int l) {
-            return (l + vec_size() - 1) / vec_size();
-        }
-        static inline int round_down(int l) {
-            return l / vec_size();
-        }
-        static inline bool is_aligned(__m128i* ptr) {
-            return !(((uintptr_t) ptr) & (sizeof(__m128i) - 1));
-        }
-        static inline __m128i load_unaligned(const __m128i* ptr) {
-            return _mm_loadu_si128(ptr);
-        }
-        static inline __m128i broadcast(IntType i);
-        static inline __m128i min_inf() {
-            return broadcast(std::numeric_limits<IntType>::min());
-        }
-        static inline __m128i ones() {
-            return broadcast(1);
-        }
-        static inline __m128i twos() {
-            return broadcast(2);
-        }
-        // O, 1, ..., L-1
-        static inline __m128i range();
-        static inline __m128i mask_and(__m128i a, __m128i b) {
-            return _mm_and_si128(a, b);
-        }
-        static inline __m128i mask_not(__m128i a) {
-            // there's not bitwise not, so i have to simulate it with xor
-            return _mm_xor_si128(a, broadcast(-1));
-        }
-        static inline __m128i eq(__m128i a, __m128i b);
-        static inline __m128i less(__m128i a, __m128i b);
-        static inline __m128i leq(__m128i a, __m128i b) {
-            return mask_not(less(b, a));
-        }
-        static inline __m128i max(__m128i a, __m128i b);
-        static inline __m128i add(__m128i a, __m128i b);
-        static inline __m128i subtract(__m128i a, __m128i b);
-        // t ? a : b
-        // note: assumes all 1 bits in condition so that 8-bit wors for all widths
-        static inline __m128i ifelse(__m128i t, __m128i a, __m128i b) {
-            return _mm_blendv_epi8(b, a, t);
-        }
-    };
-    
     // give the wrapper access to the dispatch function
-    friend class StandardGlobalWFA<CompareMatchFunc<StringView>, StringView>;
-    friend class StandardSemilocalWFA<CompareMatchFunc<RevStringView>, RevStringView>;
-    friend class LowMemGlobalWFA<CompareMatchFunc<StringView>, StringView>;
-    friend class LowMemSemilocalWFA<CompareMatchFunc<RevStringView>, RevStringView>;
-    friend class RecursiveGlobalWFA<CompareMatchFunc<StringView>, StringView>;
-    friend class RecursiveSemilocalWFA<CompareMatchFunc<RevStringView>, RevStringView>;
-    friend class AdaptiveGlobalWFA<CompareMatchFunc<StringView>, StringView>;
-    friend class AdaptiveSemilocalWFA<CompareMatchFunc<RevStringView>, RevStringView>;
+    friend class StandardGlobalWFA<FwdCompareMatchFunc, StringView>;
+    friend class StandardSemilocalWFA<RevCompareMatchFunc, RevStringView>;
+    friend class LowMemGlobalWFA<FwdCompareMatchFunc, StringView>;
+    friend class LowMemSemilocalWFA<RevCompareMatchFunc, RevStringView>;
+    friend class RecursiveGlobalWFA<FwdCompareMatchFunc, StringView>;
+    friend class RecursiveSemilocalWFA<RevCompareMatchFunc, RevStringView>;
+    friend class AdaptiveGlobalWFA<FwdCompareMatchFunc, StringView>;
+    friend class AdaptiveSemilocalWFA<RevCompareMatchFunc, RevStringView>;
     
     // central routine that back-ends the user-facing interface
     template<bool Local, int Mem, typename MatchFunc, typename StringType>
@@ -1080,10 +609,530 @@ private:
                        const WFVector& wfs) const;
 };
 
-// default
-inline WFAligner::WFAligner() {}
+/*
+ * Adapter to avoid string copying for when aligning subintervals
+ */
+class StringView {
+public:
+    StringView(const char* seq, size_t i, size_t len) : seq(seq + i), len(len)
+    {
+        
+    }
+    
+    inline const char& operator[](size_t idx) const {
+        return seq[idx];
+    }
+    
+    inline size_t size() const {
+        return len;
+    }
+    
+private:
+    
+    const char* seq;
+    size_t len;
+};
 
-inline WFAligner::WFAligner(uint32_t _mismatch, uint32_t _gap_open, uint32_t _gap_extend) {
+/*
+ * Adapter to avoid string copying for when aligning subintervals
+ * that also reverses the string
+ */
+class RevStringView {
+public:
+    // note: interval is provided in forward direction
+    RevStringView(const char* seq, size_t i, size_t len) : seql(seq + i + len - 1), len(len)
+    {
+        
+    }
+    
+    inline const char& operator[](size_t idx) const {
+        return *(seql - idx);
+    }
+    
+    inline size_t size() const {
+        return len;
+    }
+    
+private:
+    
+    // last char in the seq
+    const char* seql;
+    size_t len;
+};
+
+/*
+ * templated SIMD operations by integer width
+ */
+template<typename IntType>
+struct SIMD {
+    static inline int vec_size() {
+        return sizeof(__m128i) / sizeof(IntType);
+    }
+    static inline int round_up(int l) {
+        return (l + vec_size() - 1) / vec_size();
+    }
+    static inline int round_down(int l) {
+        return l / vec_size();
+    }
+    static inline bool is_aligned(__m128i* ptr) {
+        return !(((uintptr_t) ptr) & (sizeof(__m128i) - 1));
+    }
+    static inline __m128i load_unaligned(const __m128i* ptr) {
+        return _mm_loadu_si128(ptr);
+    }
+    static inline __m128i broadcast(IntType i);
+    static inline __m128i min_inf() {
+        return broadcast(std::numeric_limits<IntType>::min());
+    }
+    static inline __m128i ones() {
+        return broadcast(1);
+    }
+    static inline __m128i twos() {
+        return broadcast(2);
+    }
+    // O, 1, ..., L-1
+    static inline __m128i range();
+    static inline __m128i mask_and(__m128i a, __m128i b) {
+        return _mm_and_si128(a, b);
+    }
+    static inline __m128i mask_not(__m128i a) {
+        // there's not bitwise not, so i have to simulate it with xor
+        return _mm_xor_si128(a, broadcast(-1));
+    }
+    static inline __m128i eq(__m128i a, __m128i b);
+    static inline __m128i less(__m128i a, __m128i b);
+    static inline __m128i leq(__m128i a, __m128i b) {
+        return mask_not(less(b, a));
+    }
+    static inline __m128i max(__m128i a, __m128i b);
+    static inline __m128i add(__m128i a, __m128i b);
+    static inline __m128i subtract(__m128i a, __m128i b);
+    // t ? a : b
+    // note: assumes all 1 bits in condition so that 8-bit wors for all widths
+    static inline __m128i ifelse(__m128i t, __m128i a, __m128i b) {
+        return _mm_blendv_epi8(b, a, t);
+    }
+};
+
+// a match-computing function based on direct character comparison
+class CompareMatchFunc {
+    
+protected:
+    
+    template<bool Reversed, class StringType>
+    inline void load(const StringType& seq1, const StringType& seq2,
+                     size_t i, size_t j, __m128i& vec1, __m128i& vec2) const {
+        if (Reversed) {
+            static const __m128i reverser = _mm_setr_epi8(15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0);
+            vec1 = _mm_shuffle_epi8(SIMD<int8_t>::load_unaligned((__m128i const*)(&seq1[i] - sizeof(__m128i) + 1)), reverser);
+            vec2 = _mm_shuffle_epi8(SIMD<int8_t>::load_unaligned((__m128i const*)(&seq2[j] - sizeof(__m128i) + 1)), reverser);
+            
+        }
+        else {
+            vec1 = SIMD<int8_t>::load_unaligned((__m128i const*)&seq1[i]);
+            vec2 = SIMD<int8_t>::load_unaligned((__m128i const*)&seq2[j]);
+        }
+    }
+    
+    // sub-routine of the internal function that computes the length of the prefix match
+    // in the first 8 bytes of an equality mask vector
+    inline size_t partial_vec_match(const __m128i& eq) const {
+        
+        // find the mismatch among the first 8 bytes if there is one
+        __m128i pos = _mm_minpos_epu16(_mm_cvtepi8_epi16(eq));
+        return _mm_extract_epi16(pos, 0) == 0 ? _mm_extract_epi16(pos, 1) : 8;
+        
+    }
+    
+    // a template-controlled generic function for the specializations to call
+    template<bool Reversed, class StringType>
+    inline size_t match_func_internal(const StringType& seq1, const StringType& seq2, size_t i, size_t j) const {
+        // remember where we start from
+        size_t init = i;
+        
+        // TODO: is it safe to make this execute within 8 bytes from the end since the first
+        // comparison is only of the first 8 bases anyway?
+        
+        // use vectorized operations to find matches if we can
+        bool found_mismatch = false;
+        if (i + SIMD<int8_t>::vec_size() <= seq1.size() &&
+            j + SIMD<int8_t>::vec_size() <= seq2.size()) {
+            
+            // try to find a partial match of the first 8 bases
+            __m128i vec1, vec2;
+            load<Reversed, StringType>(seq1, seq2, i, j, vec1, vec2);
+            
+            __m128i eq = SIMD<int8_t>::eq(vec1, vec2);
+            
+            size_t match_len = partial_vec_match(eq);
+            i += match_len;
+            j += match_len;
+            
+            found_mismatch = (match_len < 8);
+            if (!found_mismatch) {
+                // we matched the first 8 bases, so now we transition into a cheaper matching of an
+                // entire vector to move quickly in instances of very long matches
+                
+                // TODO: i could maybe load aligned after the first iteration, but you can't guarantee
+                // alignment of both strings...
+                
+                while (i + SIMD<int8_t>::vec_size() <= seq1.size() &&
+                       j + SIMD<int8_t>::vec_size() <= seq2.size()) {
+                    
+                    load<Reversed, StringType>(seq1, seq2, i, j, vec1, vec2);
+                    eq = SIMD<int8_t>::eq(vec1, vec2);
+                    
+                    if (_mm_test_all_ones(eq)) {
+                        // we matched the entire vector
+                        i += 16;
+                        j += 16;
+                    }
+                    else {
+                        // there's a mismatch in the vector somewhere
+                        match_len = partial_vec_match(eq);
+                        i += match_len;
+                        j += match_len;
+                        
+                        if (match_len >= 8) {
+                            // the mismatch is after the first 8 bases, shift over and find it
+                            eq = _mm_alignr_epi8(SIMD<int8_t>::broadcast(0), eq, 8);
+                            match_len = partial_vec_match(eq);
+                            i += match_len;
+                            j += match_len;
+                        }
+                        found_mismatch = true;
+                        break;
+                    }
+                }
+            }
+        }
+        
+        if (!found_mismatch) {
+            // we got too close to the end of the sequences to do vectorized operations
+            // without finding a mismatch, finish out with
+            while (i < seq1.size() && j < seq2.size() && seq1[i] == seq2[j]) {
+                ++i;
+                ++j;
+            }
+        }
+        
+        return i - init;
+    }
+};
+
+/**
+ * Specialization for forward matching
+ */
+class FwdCompareMatchFunc : public CompareMatchFunc {
+public:
+    
+    FwdCompareMatchFunc(const StringView& seq1, const StringView& seq2)
+        : seq1(seq1), seq2(seq2)
+    {
+        
+    }
+    
+    // leave the actual implementation to the template specializations
+    inline size_t operator()(size_t i, size_t j) const {
+        return match_func_internal<false, StringView>(seq1, seq2, i, j);
+    }
+    
+protected:
+    
+    const StringView& seq1;
+    const StringView& seq2;
+};
+
+/**
+ * Specialization for reverse matching
+ */
+class RevCompareMatchFunc : public CompareMatchFunc {
+public:
+    
+    RevCompareMatchFunc(const RevStringView& seq1, const RevStringView& seq2)
+        : seq1(seq1), seq2(seq2)
+    {
+        
+    }
+    
+    // leave the actual implementation to the template specializations
+    inline size_t operator()(size_t i, size_t j) const {
+        return match_func_internal<true, RevStringView>(seq1, seq2, i, j);
+    }
+    
+protected:
+    
+    const RevStringView& seq1;
+    const RevStringView& seq2;
+};
+
+template<int NumPW>
+template<typename IntType>
+struct WFAligner<NumPW>::Wavefront {
+    
+private:
+    
+    inline void init_arrays() {
+        // we pad the array with a full vector on each end to handle boundary conditions
+        int padded_len = SIMD<IntType>::round_up(len) + 2;
+        alloced_len = 3 * padded_len;
+        if (posix_memalign((void**)&alloced, sizeof(__m128i), alloced_len * sizeof(__m128i))) {
+            throw std::runtime_error(std::string("error:[WFAligner] could not perform aligned allocation of size "
+                                                 + std::to_string(alloced_len * sizeof(__m128i))).c_str());
+        }
+        M = alloced + 1;
+        I = M + padded_len;
+        D = I + padded_len;
+    }
+public:
+    
+    
+    Wavefront() {}
+    Wavefront(int32_t diag_begin, int32_t diag_end)
+        : diag_begin(diag_begin), len(diag_end - diag_begin)
+    {
+        init_arrays();
+        for (int32_t i = 0; i < alloced_len; ++i) {
+            // TODO: i might be able to get away with only setting the
+            // shoulders now that the ifelse condition in DP assigns -infinity
+            alloced[i] = SIMD<IntType>::min_inf();
+        }
+    }
+    
+    inline Wavefront& operator=(const Wavefront& other) noexcept {
+        if (this != &other) {
+            diag_begin = other.diag_begin;
+            len = other.len;
+            init_arrays();
+            int unpadded_len = alloced_len / 3 - 2;
+            
+            // set the boundaries
+            *(M - 1) = SIMD<IntType>::min_inf();
+            *(M + unpadded_len) = SIMD<IntType>::min_inf();
+            *(I - 1) = SIMD<IntType>::min_inf();
+            *(I + unpadded_len) = SIMD<IntType>::min_inf();
+            *(D - 1) = SIMD<IntType>::min_inf();
+            *(D + unpadded_len) = SIMD<IntType>::min_inf();
+            
+            // copy the interior of the array
+            if (SIMD<IntType>::is_aligned(other.M)) {
+                // the arrays are aligned
+                for (int32_t i = 0; i < unpadded_len; ++i) {
+                    M[i] = other.M[i];
+                    I[i] = other.I[i];
+                    D[i] = other.D[i];
+                }
+            }
+            else {
+                // the other arrays are not aligned
+                for (int32_t i = 0; i < unpadded_len; ++i) {
+                    M[i] = _mm_loadu_si128(other.M + i);
+                    I[i] = _mm_loadu_si128(other.I + i);
+                    D[i] = _mm_loadu_si128(other.D + i);
+                }
+            }
+        }
+        return *this;
+    }
+    
+    inline Wavefront& operator=(Wavefront&& other) noexcept {
+        if (this != &other) {
+            diag_begin = other.diag_begin;
+            len = other.len;
+            alloced_len = other.alloced_len;
+            if (alloced) {
+                free(alloced);
+            }
+            alloced = other.alloced;
+            M = other.M;
+            I = other.I;
+            D = other.D;
+            
+            // TODO: i could probably get away with only resetting the
+            // alloc'ed pointer...
+            other.alloced = other.M = other.I = other.D = nullptr;
+            other.len = 0;
+            other.alloced_len = 0;
+        }
+        return *this;
+    }
+    
+    Wavefront(const Wavefront& other) noexcept {
+        *this = other;
+    }
+    
+    Wavefront(Wavefront&& other) noexcept {
+        *this = std::move(other);
+    }
+    
+    ~Wavefront() {
+        free(alloced);
+    }
+    
+    inline __m128i* vector_at(int32_t diag, WFMatrix_t mat) {
+        switch (mat) {
+            case MAT_M:
+                return (__m128i*)(((IntType*) M) + (diag - diag_begin));
+                
+            case MAT_I:
+                return (__m128i*)(((IntType*) I) + (diag - diag_begin));
+                
+            case MAT_D:
+                return (__m128i*)(((IntType*) D) + (diag - diag_begin));
+        }
+    }
+    
+    inline const __m128i* vector_at(int32_t diag, WFMatrix_t mat) const {
+        switch (mat) {
+            case MAT_M:
+                return (__m128i*)(((IntType*) M) + (diag - diag_begin));
+                
+            case MAT_I:
+                return (__m128i*)(((IntType*) I) + (diag - diag_begin));
+                
+            case MAT_D:
+                return (__m128i*)(((IntType*) D) + (diag - diag_begin));
+        }
+    }
+    
+    inline IntType& int_at(int32_t diag, WFMatrix_t mat) {
+        switch (mat) {
+            case MAT_M:
+                return *(((IntType*) M) + (diag - diag_begin));
+                
+            case MAT_I:
+                return *(((IntType*) I) + (diag - diag_begin));
+                
+            case MAT_D:
+                return *(((IntType*) D) + (diag - diag_begin));
+        }
+    }
+    
+    inline const IntType& int_at(int32_t diag, WFMatrix_t mat) const {
+        switch (mat) {
+            case MAT_M:
+                return *(((IntType*) M) + (diag - diag_begin));
+                
+            case MAT_I:
+                return *(((IntType*) I) + (diag - diag_begin));
+                
+            case MAT_D:
+                return *(((IntType*) D) + (diag - diag_begin));
+        }
+    }
+    
+    // warning: assumes that this interval is contained within the current one
+    // and that the vectors are currently aligned (i.e. should only be called
+    // once during wf_prune)
+    // it also might not work if pruning to size 0, but we don't need that
+    inline void resize(int32_t _diag_begin, int32_t _size) {
+        if (_diag_begin + _size != diag_begin + len) {
+            // we're pruning the right side
+            
+            // blend the right transition
+            int32_t k = SIMD<IntType>::round_down(_diag_begin + _size - diag_begin - 1);
+            __m128i mask = SIMD<IntType>::less(SIMD<IntType>::add(SIMD<IntType>::broadcast(diag_begin +
+                                                                                           k * SIMD<IntType>::vec_size()),
+                                                                  SIMD<IntType>::range()),
+                                               SIMD<IntType>::broadcast(_diag_begin + _size));
+            
+            
+            M[k] = SIMD<IntType>::ifelse(mask, M[k], SIMD<IntType>::min_inf());
+            I[k] = SIMD<IntType>::ifelse(mask, I[k], SIMD<IntType>::min_inf());
+            D[k] = SIMD<IntType>::ifelse(mask, D[k], SIMD<IntType>::min_inf());
+            
+            // copy full -infinity vectors
+            ++k;
+            for (int32_t n = SIMD<IntType>::round_up(diag_begin + len); k < n; ++k) {
+                M[k] = SIMD<IntType>::min_inf();
+                I[k] = SIMD<IntType>::min_inf();
+                D[k] = SIMD<IntType>::min_inf();
+            }
+        }
+        
+        if (_diag_begin != diag_begin) {
+            // we're pruning the left side
+            
+            // copy full -infinity vectors
+            int32_t k = 0;
+            for (int32_t n = SIMD<IntType>::round_down(_diag_begin - diag_begin); k < n; ++k) {
+                M[k] = SIMD<IntType>::min_inf();
+                I[k] = SIMD<IntType>::min_inf();
+                D[k] = SIMD<IntType>::min_inf();
+            }
+            // blend the left transition
+            __m128i mask = SIMD<IntType>::less(SIMD<IntType>::add(SIMD<IntType>::broadcast(diag_begin +
+                                                                                           k * SIMD<IntType>::vec_size()),
+                                                                  SIMD<IntType>::range()),
+                                               SIMD<IntType>::broadcast(_diag_begin));
+            
+            M[k] = SIMD<IntType>::ifelse(mask, SIMD<IntType>::min_inf(), M[k]);
+            I[k] = SIMD<IntType>::ifelse(mask, SIMD<IntType>::min_inf(), I[k]);
+            D[k] = SIMD<IntType>::ifelse(mask, SIMD<IntType>::min_inf(), D[k]);
+            
+            // update the pointers
+            int32_t diff = _diag_begin - diag_begin;
+            M = (__m128i*)(((IntType*) M) + diff);
+            I = (__m128i*)(((IntType*) I) + diff);
+            D = (__m128i*)(((IntType*) D) + diff);
+            diag_begin = _diag_begin;
+        }
+        
+        len = _size;
+    }
+    
+    inline int64_t size() const {
+        return len;
+    }
+    
+    inline bool empty() const {
+        return len == 0;
+    }
+    
+    inline uint64_t bytes() {
+        return sizeof(__m128i) * alloced_len;
+    }
+    
+    inline void print(std::ostream& strm) {
+        int n = alloced_len / 3;
+        for (int i = 0, j = 0; i < 3; ++i) {
+            for (int k = 0; k < n; ++k, ++j) {
+                if (k) {
+                    strm << "\t";
+                }
+                IntType* v = (IntType*) &alloced[j];
+                strm << "(";
+                for (int l = 0; l < SIMD<IntType>::vec_size(); ++l) {
+                    if (l) {
+                        strm << "\t";
+                    }
+                    strm << (int) v[l];
+                }
+                strm << ")";
+            }
+            strm << std::endl;
+        }
+    }
+    
+    __m128i* alloced = nullptr;
+    __m128i* M = nullptr;
+    __m128i* I = nullptr;
+    __m128i* D = nullptr;
+    
+    int32_t diag_begin = 0;
+    // in number of integers
+    int32_t len = 0;
+    // in number of vectors
+    int32_t alloced_len = 0;
+};
+
+
+// default
+template<int NumPW>
+inline WFAligner<NumPW>::WFAligner() {}
+
+template<int NumPW>
+inline WFAligner<NumPW>::WFAligner(uint32_t _mismatch, uint32_t _gap_open, uint32_t _gap_extend) {
     // reduce by common factor to accelerate the alignment
     if (_mismatch == 0 || _gap_extend == 0) {
         std::stringstream strm;
@@ -1101,7 +1150,8 @@ inline WFAligner::WFAligner(uint32_t _mismatch, uint32_t _gap_open, uint32_t _ga
     stripe_width = std::max(gap_open + gap_extend, mismatch);
 };
 
-inline WFAligner::WFAligner(uint32_t _match, uint32_t _mismatch, uint32_t _gap_open, uint32_t _gap_extend)
+template<int NumPW>
+inline WFAligner<NumPW>::WFAligner(uint32_t _match, uint32_t _mismatch, uint32_t _gap_open, uint32_t _gap_extend)
     : WFAligner(2 * (_match + _mismatch), 2 * _gap_open, 2 * _gap_extend + _match)
 {
     if (_match == 0) {
@@ -1112,136 +1162,132 @@ inline WFAligner::WFAligner(uint32_t _match, uint32_t _mismatch, uint32_t _gap_o
     match = _match;
 }
 
-template<> inline size_t WFAligner::CompareMatchFunc<WFAligner::StringView>::operator()(size_t i, size_t j) const {
-    return match_func_internal<false>(i, j);
-}
-
-template<> inline size_t WFAligner::CompareMatchFunc<WFAligner::RevStringView>::operator()(size_t i, size_t j) const {
-    return match_func_internal<true>(i, j);
-}
-
 // 8 bit integers
-template<> inline __m128i WFAligner::SIMD<int8_t>::broadcast(int8_t i) {
+template<> inline __m128i SIMD<int8_t>::broadcast(int8_t i) {
     return _mm_set1_epi8(i);
 }
-template<> inline __m128i WFAligner::SIMD<int8_t>::range() {
+template<> inline __m128i SIMD<int8_t>::range() {
     static const __m128i r = _mm_setr_epi8(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15);
     return r;
 }
-template<> inline __m128i WFAligner::SIMD<int8_t>::eq(__m128i a, __m128i b) {
+template<> inline __m128i SIMD<int8_t>::eq(__m128i a, __m128i b) {
     return _mm_cmpeq_epi8(a, b);
 }
-template<> inline __m128i WFAligner::SIMD<int8_t>::less(__m128i a, __m128i b) {
+template<> inline __m128i SIMD<int8_t>::less(__m128i a, __m128i b) {
     return _mm_cmplt_epi8(a, b);
 }
-template<> inline __m128i WFAligner::SIMD<int8_t>::max(__m128i a, __m128i b) {
+template<> inline __m128i SIMD<int8_t>::max(__m128i a, __m128i b) {
     return _mm_max_epi8(a, b);
 }
-template<> inline __m128i WFAligner::SIMD<int8_t>::add(__m128i a, __m128i b) {
+template<> inline __m128i SIMD<int8_t>::add(__m128i a, __m128i b) {
     return _mm_add_epi8(a, b);
 }
-template<> inline __m128i WFAligner::SIMD<int8_t>::subtract(__m128i a, __m128i b) {
+template<> inline __m128i SIMD<int8_t>::subtract(__m128i a, __m128i b) {
     return _mm_sub_epi8(a, b);
 }
 
 // 16 bit integers
-template<> inline __m128i WFAligner::SIMD<int16_t>::broadcast(int16_t i) {
+template<> inline __m128i SIMD<int16_t>::broadcast(int16_t i) {
     return _mm_set1_epi16(i);
 }
-template<> inline __m128i WFAligner::SIMD<int16_t>::range() {
+template<> inline __m128i SIMD<int16_t>::range() {
     static const __m128i r = _mm_setr_epi16(0, 1, 2, 3, 4, 5, 6, 7);
     return r;
 }
-template<> inline __m128i WFAligner::SIMD<int16_t>::eq(__m128i a, __m128i b) {
+template<> inline __m128i SIMD<int16_t>::eq(__m128i a, __m128i b) {
     return _mm_cmpeq_epi16(a, b);
 }
-template<> inline __m128i WFAligner::SIMD<int16_t>::less(__m128i a, __m128i b) {
+template<> inline __m128i SIMD<int16_t>::less(__m128i a, __m128i b) {
     return _mm_cmplt_epi16(a, b);
 }
-template<> inline __m128i WFAligner::SIMD<int16_t>::max(__m128i a, __m128i b) {
+template<> inline __m128i SIMD<int16_t>::max(__m128i a, __m128i b) {
     return _mm_max_epi16(a, b);
 }
-template<> inline __m128i WFAligner::SIMD<int16_t>::add(__m128i a, __m128i b) {
+template<> inline __m128i SIMD<int16_t>::add(__m128i a, __m128i b) {
     return _mm_add_epi16(a, b);
 }
-template<> inline __m128i WFAligner::SIMD<int16_t>::subtract(__m128i a, __m128i b) {
+template<> inline __m128i SIMD<int16_t>::subtract(__m128i a, __m128i b) {
     return _mm_sub_epi16(a, b);
 }
 
 // 32 bit integers
-template<> inline __m128i WFAligner::SIMD<int32_t>::broadcast(int32_t i) {
+template<> inline __m128i SIMD<int32_t>::broadcast(int32_t i) {
     return _mm_set1_epi32(i);
 }
-template<> inline __m128i WFAligner::SIMD<int32_t>::range() {
+template<> inline __m128i SIMD<int32_t>::range() {
     static const __m128i r = _mm_setr_epi32(0, 1, 2, 3);
     return r;
 }
-template<> inline __m128i WFAligner::SIMD<int32_t>::eq(__m128i a, __m128i b) {
+template<> inline __m128i SIMD<int32_t>::eq(__m128i a, __m128i b) {
     return _mm_cmpeq_epi32(a, b);
 }
-template<> inline __m128i WFAligner::SIMD<int32_t>::less(__m128i a, __m128i b) {
+template<> inline __m128i SIMD<int32_t>::less(__m128i a, __m128i b) {
     return _mm_cmplt_epi32(a, b);
 }
-template<> inline __m128i WFAligner::SIMD<int32_t>::max(__m128i a, __m128i b) {
+template<> inline __m128i SIMD<int32_t>::max(__m128i a, __m128i b) {
     return _mm_max_epi32(a, b);
 }
-template<> inline __m128i WFAligner::SIMD<int32_t>::add(__m128i a, __m128i b) {
+template<> inline __m128i SIMD<int32_t>::add(__m128i a, __m128i b) {
     return _mm_add_epi32(a, b);
 }
-template<> inline __m128i WFAligner::SIMD<int32_t>::subtract(__m128i a, __m128i b) {
+template<> inline __m128i SIMD<int32_t>::subtract(__m128i a, __m128i b) {
     return _mm_sub_epi32(a, b);
 }
 
-
+template<int NumPW>
 inline std::pair<std::vector<CIGAROp>, int32_t>
-WFAligner::wavefront_align(const char* seq1, size_t len1,
+WFAligner<NumPW>::wavefront_align(const char* seq1, size_t len1,
                            const char* seq2, size_t len2) const {
     StringView str1(seq1, 0, len1);
     StringView str2(seq2, 0, len2);
-    return wavefront_dispatch<false, StdMem, CompareMatchFunc<StringView>>(str1, str2,
-                                                                           std::numeric_limits<uint64_t>::max());
+    return wavefront_dispatch<false, StdMem, FwdCompareMatchFunc>(str1, str2,
+                                                                  std::numeric_limits<uint64_t>::max());
 }
 
 
+template<int NumPW>
 inline std::pair<std::vector<CIGAROp>, int32_t>
-WFAligner::wavefront_align_low_mem(const char* seq1, size_t len1,
+WFAligner<NumPW>::wavefront_align_low_mem(const char* seq1, size_t len1,
                                    const char* seq2, size_t len2) const {
     StringView str1(seq1, 0, len1);
     StringView str2(seq2, 0, len2);
-    return wavefront_dispatch<false, LowMem, CompareMatchFunc<StringView>>(str1, str2,
-                                                                           std::numeric_limits<uint64_t>::max());
+    return wavefront_dispatch<false, LowMem, FwdCompareMatchFunc>(str1, str2,
+                                                                  std::numeric_limits<uint64_t>::max());
 }
 
 
+template<int NumPW>
 inline std::pair<std::vector<CIGAROp>, int32_t>
-WFAligner::wavefront_align_recursive(const char* seq1, size_t len1,
+WFAligner<NumPW>::wavefront_align_recursive(const char* seq1, size_t len1,
                                      const char* seq2, size_t len2) const {
     StringView str1(seq1, 0, len1);
     StringView str2(seq2, 0, len2);
-    return wavefront_dispatch<false, Recursive, CompareMatchFunc<StringView>>(str1, str2,
-                                                                              std::numeric_limits<uint64_t>::max());
+    return wavefront_dispatch<false, Recursive, FwdCompareMatchFunc>(str1, str2,
+                                                                     std::numeric_limits<uint64_t>::max());
 }
 
+template<int NumPW>
 inline std::pair<std::vector<CIGAROp>, int32_t>
-WFAligner::wavefront_align_adaptive(const char* seq1, size_t len1,
+WFAligner<NumPW>::wavefront_align_adaptive(const char* seq1, size_t len1,
                                     const char* seq2, size_t len2,
                                     uint64_t max_mem) const {
     StringView str1(seq1, 0, len1);
     StringView str2(seq2, 0, len2);
-    return wavefront_dispatch<false, AdaptiveMem, CompareMatchFunc<StringView>>(str1, str2, max_mem);
+    return wavefront_dispatch<false, AdaptiveMem, FwdCompareMatchFunc>(str1, str2, max_mem);
 }
 
+template<int NumPW>
 inline std::tuple<std::vector<CIGAROp>, int32_t, std::pair<size_t, size_t>, std::pair<size_t, size_t>>
-WFAligner::wavefront_align_local(const char* seq1, size_t len1,
+WFAligner<NumPW>::wavefront_align_local(const char* seq1, size_t len1,
                                  const char* seq2, size_t len2,
                                  size_t anchor_begin_1, size_t anchor_end_1,
                                  size_t anchor_begin_2, size_t anchor_end_2,
                                  bool anchor_is_match) const {
     
     // configure the alignment and match functions
-    typedef StandardSemilocalWFA<CompareMatchFunc<RevStringView>, RevStringView> PrefWFA;
-    typedef StandardGlobalWFA<CompareMatchFunc<StringView>, StringView> AnchorWFA;
-    typedef StandardSemilocalWFA<CompareMatchFunc<StringView>, StringView> SuffWFA;
+    typedef StandardSemilocalWFA<RevCompareMatchFunc, RevStringView> PrefWFA;
+    typedef StandardGlobalWFA<FwdCompareMatchFunc, StringView> AnchorWFA;
+    typedef StandardSemilocalWFA<FwdCompareMatchFunc, StringView> SuffWFA;
     
     return wavefront_align_local_core<PrefWFA, AnchorWFA, SuffWFA>(seq1, len1, seq2, len2,
                                                                    std::numeric_limits<uint64_t>::max(),
@@ -1250,17 +1296,18 @@ WFAligner::wavefront_align_local(const char* seq1, size_t len1,
                                                                    anchor_is_match);
 }
 
+template<int NumPW>
 inline std::tuple<std::vector<CIGAROp>, int32_t, std::pair<size_t, size_t>, std::pair<size_t, size_t>>
-WFAligner::wavefront_align_local_low_mem(const char* seq1, size_t len1,
+WFAligner<NumPW>::wavefront_align_local_low_mem(const char* seq1, size_t len1,
                                          const char* seq2, size_t len2,
                                          size_t anchor_begin_1, size_t anchor_end_1,
                                          size_t anchor_begin_2, size_t anchor_end_2,
                                          bool anchor_is_match) const {
     
     // configure the alignment and match functions
-    typedef LowMemSemilocalWFA<CompareMatchFunc<RevStringView>, RevStringView> PrefWFA;
-    typedef LowMemGlobalWFA<CompareMatchFunc<StringView>, StringView> AnchorWFA;
-    typedef LowMemSemilocalWFA<CompareMatchFunc<StringView>, StringView> SuffWFA;
+    typedef LowMemSemilocalWFA<RevCompareMatchFunc, RevStringView> PrefWFA;
+    typedef LowMemGlobalWFA<FwdCompareMatchFunc, StringView> AnchorWFA;
+    typedef LowMemSemilocalWFA<FwdCompareMatchFunc, StringView> SuffWFA;
     
     return wavefront_align_local_core<PrefWFA, AnchorWFA, SuffWFA>(seq1, len1, seq2, len2,
                                                                    std::numeric_limits<uint64_t>::max(),
@@ -1269,17 +1316,18 @@ WFAligner::wavefront_align_local_low_mem(const char* seq1, size_t len1,
                                                                    anchor_is_match);
 }
 
+template<int NumPW>
 inline std::tuple<std::vector<CIGAROp>, int32_t, std::pair<size_t, size_t>, std::pair<size_t, size_t>>
-WFAligner::wavefront_align_local_recursive(const char* seq1, size_t len1,
+WFAligner<NumPW>::wavefront_align_local_recursive(const char* seq1, size_t len1,
                                            const char* seq2, size_t len2,
                                            size_t anchor_begin_1, size_t anchor_end_1,
                                            size_t anchor_begin_2, size_t anchor_end_2,
                                            bool anchor_is_match) const {
     
     // configure the alignment and match functions
-    typedef RecursiveSemilocalWFA<CompareMatchFunc<RevStringView>, RevStringView> PrefWFA;
-    typedef RecursiveGlobalWFA<CompareMatchFunc<StringView>, StringView> AnchorWFA;
-    typedef RecursiveSemilocalWFA<CompareMatchFunc<StringView>, StringView> SuffWFA;
+    typedef RecursiveSemilocalWFA<RevCompareMatchFunc, RevStringView> PrefWFA;
+    typedef RecursiveGlobalWFA<FwdCompareMatchFunc, StringView> AnchorWFA;
+    typedef RecursiveSemilocalWFA<FwdCompareMatchFunc, StringView> SuffWFA;
     
     return wavefront_align_local_core<PrefWFA, AnchorWFA, SuffWFA>(seq1, len1, seq2, len2,
                                                                    std::numeric_limits<uint64_t>::max(),
@@ -1288,8 +1336,9 @@ WFAligner::wavefront_align_local_recursive(const char* seq1, size_t len1,
                                                                    anchor_is_match);
 }
 
+template<int NumPW>
 inline std::tuple<std::vector<CIGAROp>, int32_t, std::pair<size_t, size_t>, std::pair<size_t, size_t>>
-WFAligner::wavefront_align_local_adaptive(const char* seq1, size_t len1,
+WFAligner<NumPW>::wavefront_align_local_adaptive(const char* seq1, size_t len1,
                                           const char* seq2, size_t len2,
                                           uint64_t max_mem,
                                           size_t anchor_begin_1, size_t anchor_end_1,
@@ -1297,9 +1346,9 @@ WFAligner::wavefront_align_local_adaptive(const char* seq1, size_t len1,
                                           bool anchor_is_match) const {
     
     // configure the alignment and match functions
-    typedef AdaptiveSemilocalWFA<CompareMatchFunc<RevStringView>, RevStringView> PrefWFA;
-    typedef AdaptiveGlobalWFA<CompareMatchFunc<StringView>, StringView> AnchorWFA;
-    typedef AdaptiveSemilocalWFA<CompareMatchFunc<StringView>, StringView> SuffWFA;
+    typedef AdaptiveSemilocalWFA<RevCompareMatchFunc, RevStringView> PrefWFA;
+    typedef AdaptiveGlobalWFA<FwdCompareMatchFunc, StringView> AnchorWFA;
+    typedef AdaptiveSemilocalWFA<FwdCompareMatchFunc, StringView> SuffWFA;
     
     return wavefront_align_local_core<PrefWFA, AnchorWFA, SuffWFA>(seq1, len1, seq2, len2, max_mem,
                                                                    anchor_begin_1, anchor_end_1,
@@ -1307,9 +1356,10 @@ WFAligner::wavefront_align_local_adaptive(const char* seq1, size_t len1,
                                                                    anchor_is_match);
 }
 
+template<int NumPW>
 template<bool Local, int Mem, typename MatchFunc, typename StringType>
 inline std::pair<std::vector<CIGAROp>, int32_t>
-WFAligner::wavefront_dispatch(const StringType& seq1, const StringType& seq2, uint64_t max_mem) const {
+WFAligner<NumPW>::wavefront_dispatch(const StringType& seq1, const StringType& seq2, uint64_t max_mem) const {
     
     if (seq1.size() + seq2.size() > std::numeric_limits<int32_t>::max()) {
         std::stringstream strm;
@@ -1397,9 +1447,10 @@ WFAligner::wavefront_dispatch(const StringType& seq1, const StringType& seq2, ui
     return result;
 }
 
+template<int NumPW>
 template<bool Local, bool Adaptive, typename IntType, typename StringType, typename MatchFunc>
 std::pair<std::vector<CIGAROp>, int32_t>
-WFAligner::wavefront_align_core(const StringType& seq1, const StringType& seq2,
+WFAligner<NumPW>::wavefront_align_core(const StringType& seq1, const StringType& seq2,
                                 const MatchFunc& match_func, uint64_t max_mem) const {
 
     // the return value
@@ -1481,9 +1532,10 @@ WFAligner::wavefront_align_core(const StringType& seq1, const StringType& seq2,
     return res;
 }
 
+template<int NumPW>
 template<bool Local, typename IntType, typename StringType, typename MatchFunc>
 std::pair<std::vector<CIGAROp>, int32_t>
-WFAligner::fall_back_to_low_mem(const StringType& seq1, const StringType& seq2,
+WFAligner<NumPW>::fall_back_to_low_mem(const StringType& seq1, const StringType& seq2,
                                 const MatchFunc& match_func, uint64_t max_mem,
                                 int64_t opt, int64_t opt_diag, int64_t opt_s, size_t max_s,
                                 std::vector<WFAligner::Wavefront<IntType>>& wfs) const {
@@ -1556,9 +1608,10 @@ WFAligner::fall_back_to_low_mem(const StringType& seq1, const StringType& seq2,
                                                                        curr_mem_buffer, curr_mem_bank, curr_mem_block, max_mem_block);
 }
 
+template<int NumPW>
 template<bool Local, typename IntType, typename StringType, typename MatchFunc>
 std::pair<std::vector<CIGAROp>, int32_t>
-WFAligner::wavefront_align_low_mem_core(const StringType& seq1, const StringType& seq2,
+WFAligner<NumPW>::wavefront_align_low_mem_core(const StringType& seq1, const StringType& seq2,
                                         const MatchFunc& match_func, uint64_t max_mem) const {
 
     // subsampling params
@@ -1599,14 +1652,15 @@ WFAligner::wavefront_align_low_mem_core(const StringType& seq1, const StringType
                                                                         wf_buffer, s, wf_bank, curr_mem, 0, 0, 0);
 };
 
+template<int NumPW>
 template<bool Local, bool Adaptive, typename IntType, typename StringType, typename MatchFunc>
 inline std::pair<std::vector<CIGAROp>, int32_t>
-WFAligner::wavefront_align_low_mem_core_internal(const StringType& seq1, const StringType& seq2,
+WFAligner<NumPW>::wavefront_align_low_mem_core_internal(const StringType& seq1, const StringType& seq2,
                                                  const MatchFunc& match_func, uint64_t max_mem,
                                                  int64_t epoch_len, int64_t epoch_end, int64_t sample_rate,
                                                  int64_t opt, int64_t opt_diag, int64_t opt_s, size_t max_s,
-                                                 std::deque<WFAligner::Wavefront<IntType>>& wf_buffer, size_t s,
-                                                 std::vector<std::pair<int32_t, WFAligner::Wavefront<IntType>>>& wf_bank,
+                                                 std::deque<WFAligner<NumPW>::Wavefront<IntType>>& wf_buffer, size_t s,
+                                                 std::vector<std::pair<int32_t, WFAligner<NumPW>::Wavefront<IntType>>>& wf_bank,
                                                  uint64_t curr_mem_buffer, uint64_t curr_mem_bank,
                                                  uint64_t curr_mem_block, uint64_t max_mem_block) const {
 
@@ -1720,13 +1774,14 @@ WFAligner::wavefront_align_low_mem_core_internal(const StringType& seq1, const S
     return res;
 }
 
+template<int NumPW>
 template<bool Local, typename IntType, typename StringType, typename MatchFunc>
 std::pair<std::vector<CIGAROp>, int32_t>
-WFAligner::fall_back_to_recursive(const StringType& seq1, const StringType& seq2,
+WFAligner<NumPW>::fall_back_to_recursive(const StringType& seq1, const StringType& seq2,
                                   const MatchFunc& match_func,
                                   int64_t opt, int64_t opt_diag, int64_t opt_s, size_t max_s,
-                                  std::deque<WFAligner::Wavefront<IntType>>& wf_buffer, size_t s,
-                                  std::vector<std::pair<int32_t, WFAligner::Wavefront<IntType>>>& wf_bank) const {
+                                  std::deque<WFAligner<NumPW>::Wavefront<IntType>>& wf_buffer, size_t s,
+                                  std::vector<std::pair<int32_t, WFAligner<NumPW>::Wavefront<IntType>>>& wf_bank) const {
     
     // convert the low memory data structures into the recursive data structures
     
@@ -1783,9 +1838,10 @@ WFAligner::fall_back_to_recursive(const StringType& seq1, const StringType& seq2
                                                                    opt_stripe, first_stripe, wf_buffer, s);
 }
 
+template<int NumPW>
 template<bool Local, typename IntType, typename StringType, typename MatchFunc>
 std::pair<std::vector<CIGAROp>, int32_t>
-WFAligner::wavefront_align_recursive_core(const StringType& seq1, const StringType& seq2,
+WFAligner<NumPW>::wavefront_align_recursive_core(const StringType& seq1, const StringType& seq2,
                                           const MatchFunc& match_func) const {
     
     // trackers used for local alignment
@@ -1814,14 +1870,15 @@ WFAligner::wavefront_align_recursive_core(const StringType& seq1, const StringTy
                                                                    opt_stripe, first_stripe, wf_buffer, s);
 }
 
+template<int NumPW>
 template<bool Local, typename IntType, typename StringType, typename MatchFunc>
 inline std::pair<std::vector<CIGAROp>, int32_t>
-WFAligner::wavefront_align_recursive_core_internal(const StringType& seq1, const StringType& seq2,
+WFAligner<NumPW>::wavefront_align_recursive_core_internal(const StringType& seq1, const StringType& seq2,
                                                    const MatchFunc& match_func,
                                                    int64_t opt, int64_t opt_diag, int64_t opt_s, size_t max_s,
-                                                   std::vector<WFAligner::Wavefront<IntType>>& opt_stripe,
-                                                   std::vector<WFAligner::Wavefront<IntType>>& first_stripe,
-                                                   std::deque<WFAligner::Wavefront<IntType>>& wf_buffer, size_t s) const {
+                                                   std::vector<WFAligner<NumPW>::Wavefront<IntType>>& opt_stripe,
+                                                   std::vector<WFAligner<NumPW>::Wavefront<IntType>>& first_stripe,
+                                                   std::deque<WFAligner<NumPW>::Wavefront<IntType>>& wf_buffer, size_t s) const {
     
     // use these to know when we've finished the alignment
     int32_t final_diag = seq1.size() - seq2.size();
@@ -1933,8 +1990,9 @@ WFAligner::wavefront_align_recursive_core_internal(const StringType& seq1, const
 }
 
 
+template<int NumPW>
 template<bool Local, typename IntType, typename StringType, typename MatchFunc, typename WFVector1, typename WFVector2>
-void WFAligner::wavefront_align_recursive_internal(const StringType& seq1, const StringType& seq2,
+void WFAligner<NumPW>::wavefront_align_recursive_internal(const StringType& seq1, const StringType& seq2,
                                                    int64_t lower_stripe_num, WFVector1& lower_stripe,
                                                    int64_t upper_stripe_num, WFVector2& upper_stripe,
                                                    int64_t& traceback_s, int64_t& traceback_d,
@@ -2015,9 +2073,10 @@ void WFAligner::wavefront_align_recursive_internal(const StringType& seq1, const
     }
 }
 
+template<int NumPW>
 template<typename PrefSemilocalWFA, typename AnchorGlobalWFA, typename SuffSemilocalWFA>
 std::tuple<std::vector<CIGAROp>, int32_t, std::pair<size_t, size_t>, std::pair<size_t, size_t>>
-WFAligner::wavefront_align_local_core(const char* seq1, size_t len1,
+WFAligner<NumPW>::wavefront_align_local_core(const char* seq1, size_t len1,
                                       const char* seq2, size_t len2,
                                       uint64_t max_mem,
                                       size_t anchor_begin_1, size_t anchor_end_1,
@@ -2092,8 +2151,9 @@ WFAligner::wavefront_align_local_core(const char* seq1, size_t len1,
                                           anchor_end_2 + aligned_suff_len.second));
 }
 
+template<int NumPW>
 template<typename StringType, typename MatchFunc, typename IntType>
-inline void WFAligner::wavefront_extend(const StringType& seq1, const StringType& seq2,
+inline void WFAligner<NumPW>::wavefront_extend(const StringType& seq1, const StringType& seq2,
                                         Wavefront<IntType>& wf, const MatchFunc& match_func) const {
     
     for (int64_t k = 0; k < wf.size(); ++k) {
@@ -2107,9 +2167,11 @@ inline void WFAligner::wavefront_extend(const StringType& seq1, const StringType
     }
 }
 
+template<int NumPW>
 template<typename IntType, typename WFVector, typename StringType>
-inline WFAligner::Wavefront<IntType> WFAligner::wavefront_next(const StringType& seq1, const StringType& seq2,
-                                                               const WFVector& wfs) const {
+inline typename WFAligner<NumPW>::template Wavefront<IntType>
+WFAligner<NumPW>::wavefront_next(const StringType& seq1, const StringType& seq2,
+                                 const WFVector& wfs) const {
     
     // find the range of incoming wavefronts
     int32_t hi = std::numeric_limits<int32_t>::min();
@@ -2275,8 +2337,9 @@ inline WFAligner::Wavefront<IntType> WFAligner::wavefront_next(const StringType&
     return wf;
 }
 
+template<int NumPW>
 template<bool Local, typename IntType>
-inline void WFAligner::wavefront_prune(WFAligner::Wavefront<IntType>& wf) const {
+inline void WFAligner<NumPW>::wavefront_prune(WFAligner<NumPW>::Wavefront<IntType>& wf) const {
     // TODO: for now, just skipping pruning for local alignment, but actually should come up
     // with a better pruning mechanism for it...
     if (!wf.empty() && lagging_diagonal_prune >= 0 && !Local) {
@@ -2304,8 +2367,9 @@ inline void WFAligner::wavefront_prune(WFAligner::Wavefront<IntType>& wf) const 
     }
 }
 
+template<int NumPW>
 template<typename IntType>
-inline bool WFAligner::wavefront_reached(const WFAligner::Wavefront<IntType>& wf,
+inline bool WFAligner<NumPW>::wavefront_reached(const WFAligner<NumPW>::Wavefront<IntType>& wf,
                                          int32_t diag, int32_t anti_diag) const {
     if (diag >= wf.diag_begin && diag < wf.diag_begin + wf.size()) {
         return (wf.int_at(diag, MAT_M) == anti_diag);
@@ -2313,9 +2377,10 @@ inline bool WFAligner::wavefront_reached(const WFAligner::Wavefront<IntType>& wf
     return false;
 }
 
-template <typename StringType, typename IntType>
-inline std::vector<CIGAROp> WFAligner::wavefront_traceback(const StringType& seq1, const StringType& seq2,
-                                                           const std::vector<WFAligner::Wavefront<IntType>>& wfs,
+template<int NumPW>
+template<typename StringType, typename IntType>
+inline std::vector<CIGAROp> WFAligner<NumPW>::wavefront_traceback(const StringType& seq1, const StringType& seq2,
+                                                           const std::vector<WFAligner<NumPW>::Wavefront<IntType>>& wfs,
                                                            int64_t s, int64_t d) const {
     
     // always begin traceback in the match matrix
@@ -2330,8 +2395,9 @@ inline std::vector<CIGAROp> WFAligner::wavefront_traceback(const StringType& seq
     return cigar;
 }
 
+template<int NumPW>
 template <bool Local, typename StringType, typename MatchFunc, typename IntType>
-std::vector<CIGAROp> WFAligner::wavefront_traceback_low_mem(const StringType& seq1, const StringType& seq2,
+std::vector<CIGAROp> WFAligner<NumPW>::wavefront_traceback_low_mem(const StringType& seq1, const StringType& seq2,
                                                             std::vector<std::pair<int32_t, Wavefront<IntType>>>& wf_bank,
                                                             int64_t s, int64_t d, const MatchFunc& match_func) const {
     
@@ -2425,8 +2491,9 @@ std::vector<CIGAROp> WFAligner::wavefront_traceback_low_mem(const StringType& se
     return cigar;
 }
 
+template<int NumPW>
 template<typename WFVector, typename StringType>
-void WFAligner::wavefront_traceback_internal(const StringType& seq1, const StringType& seq2,
+void WFAligner<NumPW>::wavefront_traceback_internal(const StringType& seq1, const StringType& seq2,
                                              const WFVector& wfs, int64_t& d, int64_t& lead_matches,
                                              WFMatrix_t& mat, int64_t& s, std::vector<CIGAROp>& cigar) const {
     uint32_t op_len = 0;
@@ -2568,7 +2635,8 @@ void WFAligner::wavefront_traceback_internal(const StringType& seq1, const Strin
 }
 
 
-uint32_t WFAligner::gcd(uint32_t a, uint32_t b) const {
+template<int NumPW>
+uint32_t WFAligner<NumPW>::gcd(uint32_t a, uint32_t b) const {
     // euclid's algorithm
     if (a < b) {
         std::swap(a, b);
@@ -2582,8 +2650,9 @@ uint32_t WFAligner::gcd(uint32_t a, uint32_t b) const {
     }
 }
 
+template<int NumPW>
 template<typename StringType, typename IntType>
-inline void WFAligner::find_local_opt(const StringType& seq1, const StringType& seq2,
+inline void WFAligner<NumPW>::find_local_opt(const StringType& seq1, const StringType& seq2,
                                       int64_t s, const Wavefront<IntType>& wf,
                                       int64_t& opt, int64_t& opt_diag, int64_t& opt_s, size_t& max_s) const {
     // TODO: this should be vectorized as well
@@ -2602,11 +2671,13 @@ inline void WFAligner::find_local_opt(const StringType& seq1, const StringType& 
     }
 }
 
-inline int32_t WFAligner::convert_score(size_t len1, size_t len2, int32_t score) const {
+template<int NumPW>
+inline int32_t WFAligner<NumPW>::convert_score(size_t len1, size_t len2, int32_t score) const {
     return (match * (len1 + len2) - score) / 2;
 }
 
-inline std::pair<size_t, size_t> WFAligner::cigar_base_length(const std::vector<CIGAROp>& cigar) const {
+template<int NumPW>
+inline std::pair<size_t, size_t> WFAligner<NumPW>::cigar_base_length(const std::vector<CIGAROp>& cigar) const {
     size_t len1 = 0, len2 = 0;
     for (const auto& c : cigar) {
         switch (c.op) {
@@ -2631,7 +2702,8 @@ inline std::pair<size_t, size_t> WFAligner::cigar_base_length(const std::vector<
 }
 
 // merge all adjacent, equivalent operations
-inline void WFAligner::coalesce_cigar(std::vector<CIGAROp>& cigar) const {
+template<int NumPW>
+inline void WFAligner<NumPW>::coalesce_cigar(std::vector<CIGAROp>& cigar) const {
     size_t into = 0;
     for (size_t j = 1; j < cigar.size(); ++j) {
         if (cigar[j].op == cigar[into].op) {
@@ -2651,8 +2723,9 @@ inline void WFAligner::coalesce_cigar(std::vector<CIGAROp>& cigar) const {
     cigar.resize(into + 1);
 }
 
+template<int NumPW>
 template<typename IntType>
-inline void WFAligner::print_wf(const WFAligner::Wavefront<IntType>& wf, int diag_begin, int diag_end) const {
+inline void WFAligner<NumPW>::print_wf(const WFAligner<NumPW>::Wavefront<IntType>& wf, int diag_begin, int diag_end) const {
     for (int d = diag_begin; d < diag_end; ++d) {
         if (d >= wf.diag_begin && d < wf.diag_begin + (int) wf.size()) {
             int a = wf.int_at(d, MAT_M);
@@ -2694,8 +2767,9 @@ inline void WFAligner::print_wf(const WFAligner::Wavefront<IntType>& wf, int dia
     std::cerr << std::endl;
 }
 
+template<int NumPW>
 template<typename WFVector>
-void WFAligner::print_wfs(const WFVector& wfs) const {
+void WFAligner<NumPW>::print_wfs(const WFVector& wfs) const {
     int min_begin = std::numeric_limits<int>::max();
     int max_end = std::numeric_limits<int>::min();
     for (int s = 0; s < wfs.size(); ++s) {
@@ -2713,9 +2787,10 @@ void WFAligner::print_wfs(const WFVector& wfs) const {
     }
 }
 
+template<int NumPW>
 template<typename IntType>
-inline void WFAligner::print_wfs_low_mem(const std::vector<std::pair<int32_t, WFAligner::Wavefront<IntType>>>& wf_bank,
-                                         const std::deque<WFAligner::Wavefront<IntType>>& wf_buffer, int s) const {
+inline void WFAligner<NumPW>::print_wfs_low_mem(const std::vector<std::pair<int32_t, WFAligner::Wavefront<IntType>>>& wf_bank,
+                                         const std::deque<WFAligner<NumPW>::Wavefront<IntType>>& wf_buffer, int s) const {
     int min_begin = std::numeric_limits<int>::max();
     int max_end = std::numeric_limits<int>::min();
     for (int i = 0; i < wf_bank.size(); ++i) {
@@ -2759,9 +2834,10 @@ inline void WFAligner::print_wfs_low_mem(const std::vector<std::pair<int32_t, WF
     }
 }
 
+template<int NumPW>
 template<typename IntType>
-inline void WFAligner::print_wfs_tb(const std::deque<WFAligner::Wavefront<IntType>>& traceback_block,
-                                    const std::vector<std::pair<int32_t, WFAligner::Wavefront<IntType>>>& wf_bank,
+inline void WFAligner<NumPW>::print_wfs_tb(const std::deque<WFAligner<NumPW>::Wavefront<IntType>>& traceback_block,
+                                    const std::vector<std::pair<int32_t, WFAligner<NumPW>::Wavefront<IntType>>>& wf_bank,
                                     int i) const {
 
     std::cerr << "### print traceback block " << wf_bank[i].first << ":" << wf_bank[i].first + traceback_block.size() << " ###" << std::endl;
@@ -2781,8 +2857,9 @@ inline void WFAligner::print_wfs_tb(const std::deque<WFAligner::Wavefront<IntTyp
     }
 }
 
+template<int NumPW>
 template <typename StringType, typename WFVector>
-void WFAligner::wavefront_viz(const StringType& seq1, const StringType& seq2,
+void WFAligner<NumPW>::wavefront_viz(const StringType& seq1, const StringType& seq2,
                               const WFVector& wfs) const {
 
     std::vector<std::vector<int>> matrix(seq1.size() + 1, std::vector<int>(seq2.size() + 1, -1));

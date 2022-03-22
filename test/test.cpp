@@ -83,8 +83,8 @@ int main(int argc, char** argv) {
     int gap_extend = 1;
     int max_mem = 400;
 
-    wfalm::WFAligner aligner(mismatch, gap_open, gap_extend);
-    wfalm::WFAlignerST aligner_st(mismatch, gap_open, gap_extend);
+    wfalm::WFAligner<1> aligner(mismatch, gap_open, gap_extend);
+    wfalm::WFAlignerST<1> aligner_st(mismatch, gap_open, gap_extend);
     
     int prune = -1;//ceil(-2.0 * log(1e-12) / log(4.0));
     aligner.lagging_diagonal_prune = prune;
