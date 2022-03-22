@@ -78,13 +78,13 @@ int main(int argc, char** argv) {
     std::string seq1 = "TACGGTCACCGCGACGACGACGGCAATTACTCCAAGTTGTCT";
     std::string seq2 = "TACGGCACGGCGATGAACGACGGCACTTTCTCCATTGTCC";
     
-    int mismatch = 1;
-    int gap_open = 1;
-    int gap_extend = 1;
-    int max_mem = 400;
+    uint32_t mismatch = 1;
+    uint32_t gap_open = 1;
+    uint32_t gap_extend = 1;
+    uint32_t max_mem = 400;
 
-    wfalm::WFAligner<1> aligner(mismatch, gap_open, gap_extend);
-    wfalm::WFAlignerST<1> aligner_st(mismatch, gap_open, gap_extend);
+    wfalm::WFAligner<1> aligner(mismatch, {gap_extend}, {gap_open});
+    wfalm::WFAlignerST<1> aligner_st(mismatch, {gap_extend}, {gap_open});
     
     int prune = -1;//ceil(-2.0 * log(1e-12) / log(4.0));
     aligner.lagging_diagonal_prune = prune;
@@ -172,14 +172,14 @@ int main(int argc, char** argv) {
     auto local_seq1 = pref1 + seq1 + suff1;
     auto local_seq2 = pref2 + seq2 + suff2;
     
-    int match_sw = 1;
-    int mismatch_sw = 1;
-    int gap_open_sw = 2;
-    int gap_extend_sw = 1;
+    uint32_t match_sw = 1;
+    uint32_t mismatch_sw = 1;
+    uint32_t gap_open_sw = 2;
+    uint32_t gap_extend_sw = 1;
     int max_mem_sw = 200;
     
-    wfalm::WFAligner<1> aligner_sw(match_sw, mismatch_sw, gap_open_sw, gap_extend_sw);
-    wfalm::WFAlignerST<1> aligner_sw_st(match_sw, mismatch_sw, gap_open_sw, gap_extend_sw);
+    wfalm::WFAligner<1> aligner_sw(match_sw, mismatch_sw, {gap_extend_sw}, {gap_open_sw});
+    wfalm::WFAlignerST<1> aligner_sw_st(match_sw, mismatch_sw, {gap_extend_sw}, {gap_open_sw});
     
     int anchor_begin_1 = pref1.size() + 16;
     int anchor_end_1 = pref1.size() + 25;

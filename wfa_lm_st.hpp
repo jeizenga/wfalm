@@ -50,12 +50,16 @@ public:
     /// Initialize with WFA-style score parameters. On opening an insertion or
     /// deletion, *both* the gap open and gap extend penalties are applied.
     /// Scores returned by alignment methods will also be WFA-style.
-    WFAlignerST(uint32_t mismatch, uint32_t gap_open, uint32_t gap_extend);
+    WFAlignerST(uint32_t mismatch,
+                std::array<uint32_t, std::max(1, NumPW)> gap_extend,
+                std::array<uint32_t, NumPW> gap_open);
     
     /// Initialize with Smith-Waterman-Gotoh-style score parameters. On opening an
     /// insertion or deletion, *both* the gap open and gap extend penalties are applied.
     /// Scores returned by alignment methods will also be Smith-Waterman-Gotoh-style.
-    WFAlignerST(uint32_t match, uint32_t mismatch, uint32_t gap_open, uint32_t gap_extend);
+    WFAlignerST(uint32_t match, uint32_t mismatch,
+                std::array<uint32_t, std::max(1, NumPW)> gap_extend,
+                std::array<uint32_t, NumPW> gap_open);
     
     /// Default constructor. Performs edit distance alignment.
     WFAlignerST();
@@ -404,15 +408,19 @@ template<int NumPW>
 WFAlignerST<NumPW>::WFAlignerST() : WFAligner<NumPW>() {}
 
 template<int NumPW>
-WFAlignerST<NumPW>::WFAlignerST(uint32_t mismatch, uint32_t gap_open, uint32_t gap_extend)
-    : WFAligner<NumPW>(mismatch, gap_open, gap_extend)
+WFAlignerST<NumPW>::WFAlignerST(uint32_t mismatch,
+                                std::array<uint32_t, std::max(1, NumPW)> gap_extend,
+                                std::array<uint32_t, NumPW> gap_open)
+    : WFAligner<NumPW>(mismatch, gap_extend, gap_open)
 {
     // only need to delegate to WFAligner
 }
 
 template<int NumPW>
-WFAlignerST<NumPW>::WFAlignerST(uint32_t match, uint32_t mismatch, uint32_t gap_open, uint32_t gap_extend)
-    : WFAligner<NumPW>(match, mismatch, gap_open, gap_extend)
+WFAlignerST<NumPW>::WFAlignerST(uint32_t match, uint32_t mismatch,
+                                std::array<uint32_t, std::max(1, NumPW)> gap_extend,
+                                std::array<uint32_t, NumPW> gap_open)
+    : WFAligner<NumPW>(match, mismatch, gap_extend, gap_open)
 {
     // only need to delegate to WFAligner
 }

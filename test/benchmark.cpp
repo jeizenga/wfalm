@@ -156,10 +156,10 @@ int64_t max_memory_usage() {
 
 int main(int argc, char **argv) {
     
-    int match = default_match;
-    int mismatch = default_mismatch;
-    int gap_open = default_gap_open;
-    int gap_extend = default_gap_extend;
+    uint32_t match = default_match;
+    uint32_t mismatch = default_mismatch;
+    uint32_t gap_open = default_gap_open;
+    uint32_t gap_extend = default_gap_extend;
     size_t anchor11 = 0, anchor12 = 0, anchor21 = 0, anchor22 = 0;
     bool local = false;
     bool compare_match = true;
@@ -302,12 +302,12 @@ int main(int argc, char **argv) {
     WFAligner<1> aligner;
     WFAlignerST<1> aligner_st;
     if (match == 0) {
-        aligner = WFAligner<1>(mismatch, gap_open, gap_extend);
-        aligner_st = WFAlignerST<1>(mismatch, gap_open, gap_extend);
+        aligner = WFAligner<1>(mismatch, {gap_extend}, {gap_open});
+        aligner_st = WFAlignerST<1>(mismatch, {gap_extend}, {gap_open});
     }
     else {
-        aligner = WFAligner<1>(match, mismatch, gap_open, gap_extend);
-        aligner_st = WFAlignerST<1>(match, mismatch, gap_open, gap_extend);
+        aligner = WFAligner<1>(match, mismatch, {gap_extend}, {gap_open});
+        aligner_st = WFAlignerST<1>(match, mismatch, {gap_extend}, {gap_open});
     }
     
     cerr << "[progress] aligning sequences '" << seqname1 << "' (length " << seq1.size() << ") and '" << seqname2 << "' (length " << seq2.size() << "):" << endl;
