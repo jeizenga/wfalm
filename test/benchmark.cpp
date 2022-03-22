@@ -299,15 +299,15 @@ int main(int argc, char **argv) {
     cerr << "PARSE TIME: " << parse_time.count() << " us" << endl;
     cerr << "BASELINE MEM: " << max_memory_usage() << " KB" << endl;
 
-    WFAligner aligner;
-    WFAlignerST aligner_st;
+    WFAligner<1> aligner;
+    WFAlignerST<1> aligner_st;
     if (match == 0) {
-        aligner = WFAligner(mismatch, gap_open, gap_extend);
-        aligner_st = WFAlignerST(mismatch, gap_open, gap_extend);
+        aligner = WFAligner<1>(mismatch, gap_open, gap_extend);
+        aligner_st = WFAlignerST<1>(mismatch, gap_open, gap_extend);
     }
     else {
-        aligner = WFAligner(match, mismatch, gap_open, gap_extend);
-        aligner_st = WFAlignerST(match, mismatch, gap_open, gap_extend);
+        aligner = WFAligner<1>(match, mismatch, gap_open, gap_extend);
+        aligner_st = WFAlignerST<1>(match, mismatch, gap_open, gap_extend);
     }
     
     cerr << "[progress] aligning sequences '" << seqname1 << "' (length " << seq1.size() << ") and '" << seqname2 << "' (length " << seq2.size() << "):" << endl;

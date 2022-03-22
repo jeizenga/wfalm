@@ -42,12 +42,6 @@
 
 namespace wfalm {
 
-// A few forward declarations (users can ignore these)
-class FwdCompareMatchFunc;
-class RevCompareMatchFunc;
-class StringView;
-class RevStringView;
-
 
 /*
  * Operation in a CIGAR string (as defined in SAM format specification)
@@ -428,14 +422,14 @@ protected:
     };
     
     // give the wrapper access to the dispatch function
-    friend class StandardGlobalWFA<FwdCompareMatchFunc, StringView>;
-    friend class StandardSemilocalWFA<RevCompareMatchFunc, RevStringView>;
-    friend class LowMemGlobalWFA<FwdCompareMatchFunc, StringView>;
-    friend class LowMemSemilocalWFA<RevCompareMatchFunc, RevStringView>;
-    friend class RecursiveGlobalWFA<FwdCompareMatchFunc, StringView>;
-    friend class RecursiveSemilocalWFA<RevCompareMatchFunc, RevStringView>;
-    friend class AdaptiveGlobalWFA<FwdCompareMatchFunc, StringView>;
-    friend class AdaptiveSemilocalWFA<RevCompareMatchFunc, RevStringView>;
+    template<class MatchFunc, class StringType> friend class StandardGlobalWFA;
+    template<class MatchFunc, class StringType> friend class StandardSemilocalWFA;
+    template<class MatchFunc, class StringType> friend class LowMemGlobalWFA;
+    template<class MatchFunc, class StringType> friend class LowMemSemilocalWFA;
+    template<class MatchFunc, class StringType> friend class RecursiveGlobalWFA;
+    template<class MatchFunc, class StringType> friend class RecursiveSemilocalWFA;
+    template<class MatchFunc, class StringType> friend class AdaptiveGlobalWFA;
+    template<class MatchFunc, class StringType> friend class AdaptiveSemilocalWFA;
     
     // central routine that back-ends the user-facing interface
     template<bool Local, int Mem, typename MatchFunc, typename StringType>
