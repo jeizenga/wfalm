@@ -1847,8 +1847,8 @@ WFAligner<NumPW>::fall_back_to_recursive(const StringType& seq1, const StringTyp
         
         if (Local) {
             
-            int64_t opt_stripe_num = (opt_s + stripe_width - 1) / stripe_width;
-            if (opt_stripe_num != 0 && opt_stripe_num < (s - wf_buffer.size()) / stripe_width + 1) {
+            int64_t opt_stripe_num = opt_s / stripe_width;
+            if (opt_stripe_num != 0 && opt_stripe_num < (s - wf_buffer.size() + 1) / stripe_width) {
                 // the opt isn't in the first stripe or the buffer, so we need to either find or recompute it
                 
                 size_t i = 0;
@@ -1980,14 +1980,14 @@ WFAligner<NumPW>::wavefront_align_recursive_core_internal(const StringType& seq1
         traceback_s = opt_s;
         score = opt_s;
         
-        // TODO: i don't like repeating this formula 3x in different places...
-        int64_t opt_stripe_num = (opt_s + stripe_width - 1) / stripe_width;
-        if (opt_stripe_num != 0 && opt_stripe_num != (s - wf_buffer.size()) / stripe_width + 1) {
+        int64_t opt_stripe_num = opt_s / stripe_width;
+        if (opt_stripe_num != 0 && opt_stripe_num < (s - wf_buffer.size() + 1) / stripe_width) {
             // the local optimum did not occur in the first or last stripe, so we replace the contents
             // of the last stripe with the opt's stripe, which we should have retained
+            // we maintain the final position in the buffer is where traceback should begin
             wf_buffer.clear();
-            for (auto& wf : opt_stripe) {
-                wf_buffer.emplace_back(std::move(wf));
+            for (size_t i = 0, n = opt_s - opt_stripe_num * stripe_width; i <= n; ++i) {
+                wf_buffer.emplace_back(std::move(opt_stripe[i]));
             }
         }
     }
@@ -2018,7 +2018,7 @@ WFAligner<NumPW>::wavefront_align_recursive_core_internal(const StringType& seq1
     }
     else {
         // we enter the recursive portion of the algorithm
-        int64_t stripe_num = (traceback_s - wf_buffer.size()) / stripe_width + 1;
+        int64_t stripe_num = (traceback_s - wf_buffer.size() + 1) / stripe_width;
         int traceback_mat = 0;
         int64_t lead_matches = 0;
         wavefront_align_recursive_internal<Local, IntType>(seq1, seq2,

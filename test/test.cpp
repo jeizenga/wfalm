@@ -233,6 +233,15 @@ int main(int argc, char** argv) {
 
     wfalm::WFAligner<1> aligner_sw(match_sw, mismatch_sw, {gap_extend_sw}, {gap_open_sw});
     wfalm::WFAlignerST<1> aligner_sw_st(match_sw, mismatch_sw, {gap_extend_sw}, {gap_open_sw});
+    
+//    uint32_t match_sw = 1;
+//    uint32_t mismatch_sw = 1;
+//    uint32_t gap_extend_sw = 1;
+//    uint32_t gap_open_sw = 0;
+//    int max_mem_sw = 200;
+//
+//    wfalm::WFAligner<0> aligner_sw(match_sw, mismatch_sw, {gap_extend_sw}, {});
+//    wfalm::WFAlignerST<0> aligner_sw_st(match_sw, mismatch_sw, {gap_extend_sw}, {});
 
     int anchor_begin_1 = pref1.size() + 16;
     int anchor_end_1 = pref1.size() + 25;
