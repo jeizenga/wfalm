@@ -54,10 +54,32 @@ struct CIGAROp {
     uint32_t len;
 };
 
+template<int NumPW> class WFAligner; // forward declaration
+
+/*
+ * A convenience specialization that uses a linear gap penalty.
+ */
+typedef WFAligner<0> LinearWFAligner;
+/// Construct with WFA-style scoring parameters
+inline LinearWFAligner make_linear_wfaligner(uint32_t mismatch, uint32_t gap);
+/// Construct with Smith-Waterman-Gotoh-style scoring parameters
+inline LinearWFAligner make_linear_wfaligner(uint32_t match, uint32_t mismatch, uint32_t gap);
+
+/*
+ * A convenience specialization that uses an affine gap penalty.
+ */
+typedef WFAligner<1> AffineWFAligner;
+/// Construct with WFA-style scoring parameters
+inline AffineWFAligner make_affine_wfaligner(uint32_t mismatch, uint32_t gap_extend, uint32_t gap_open);
+/// Construct with Smith-Waterman-Gotoh-style scoring parameters
+inline AffineWFAligner make_affine_wfaligner(uint32_t match, uint32_t mismatch, uint32_t gap_extend, uint32_t gap_open);
+
 /*
  * Class that performs WFA with the standard, low-memory, or recusive variants.
  * The aligner objects are relatively lightweight and can be constructed for
- * single-use with limited overhead.
+ * single-use with limited overhead. The template integer controls how many
+ * piecewise-affine segments there are in the gap penalty. As a special case,
+ * a template parameter of 0 performs linear gap alignment.
  */
 template<int NumPW>
 class WFAligner {
@@ -67,6 +89,9 @@ public:
     /// Initialize with WFA-style score parameters. On opening an insertion or
     /// deletion, *both* the gap open and gap extend penalties are applied.
     /// Scores returned by alignment methods will also be WFA-style.
+    /// One gap extend and gap open penalty are required for each of the piecewise
+    /// affine segments. If the template parameter is set to 0, then one gap extend
+    /// is still required, ang the aligner then performs linear gap alignment.
     WFAligner(uint32_t mismatch,
               std::array<uint32_t, std::max(1, NumPW)> gap_extend,
               std::array<uint32_t, NumPW> gap_open);
@@ -74,11 +99,14 @@ public:
     /// Initialize with Smith-Waterman-Gotoh-style score parameters. On opening an
     /// insertion or deletion, *both* the gap open and gap extend penalties are applied.
     /// Scores returned by alignment methods will also be Smith-Waterman-Gotoh-style.
+    /// One gap extend and gap open penalty are required for each of the piecewise
+    /// affine segments. If the template parameter is set to 0, then one gap extend
+    /// is still required, ang the aligner then performs linear gap alignment.
     WFAligner(uint32_t match, uint32_t mismatch,
               std::array<uint32_t, std::max(1, NumPW)> gap_extend,
               std::array<uint32_t, NumPW> gap_open);
     
-    /// Default constructor. Performs edit distance alignment.
+    /// Default constructor
     WFAligner();
 
     /*****************************
@@ -707,6 +735,7 @@ struct SIMD {
     static inline __m128i max(__m128i a, __m128i b);
     static inline __m128i add(__m128i a, __m128i b);
     static inline __m128i subtract(__m128i a, __m128i b);
+    //static inline __m128i div2(__m128i a);
     // t ? a : b
     // note: assumes all 1 bits in condition so that 8-bit wors for all widths
     static inline __m128i ifelse(__m128i t, __m128i a, __m128i b) {
@@ -1084,6 +1113,23 @@ public:
     int32_t interval = 0;
 };
 
+LinearWFAligner make_linear_wfaligner(uint32_t mismatch, uint32_t gap) {
+    return LinearWFAligner(mismatch, std::array<uint32_t, 1>{gap}, std::array<uint32_t, 0>());
+}
+
+LinearWFAligner make_linear_wfaligner(uint32_t match, uint32_t mismatch, uint32_t gap) {
+    return LinearWFAligner(match, mismatch, std::array<uint32_t, 1>{gap}, std::array<uint32_t, 0>());
+}
+
+
+AffineWFAligner make_affine_wfaligner(uint32_t mismatch, uint32_t gap_extend, uint32_t gap_open) {
+    return AffineWFAligner(mismatch, std::array<uint32_t, 1>{gap_extend}, std::array<uint32_t, 1>{gap_open});
+}
+
+AffineWFAligner make_affine_wfaligner(uint32_t match, uint32_t mismatch, uint32_t gap_extend, uint32_t gap_open) {
+    return AffineWFAligner(match, mismatch, std::array<uint32_t, 1>{gap_extend}, std::array<uint32_t, 1>{gap_open});
+}
+
 template<int NumPW>
 inline void WFAligner<NumPW>::init(uint32_t _mismatch,
                                    std::array<uint32_t, std::max(1, NumPW)> _gap_extend,
@@ -1192,6 +1238,10 @@ template<> inline __m128i SIMD<int8_t>::add(__m128i a, __m128i b) {
 template<> inline __m128i SIMD<int8_t>::subtract(__m128i a, __m128i b) {
     return _mm_sub_epi8(a, b);
 }
+//template<> inline __m128i SIMD<int8_t>::div2(__m128i a) {
+//    // no 8-bit version, use 16 and then mask out the overflow bits
+//    return _mm_and_si128(_mm_srli_epi16(a, 1), _mm_set1_epi8(0x3f));
+//}
 
 // 16 bit integers
 template<> inline __m128i SIMD<int16_t>::broadcast(int16_t i) {
@@ -1216,6 +1266,9 @@ template<> inline __m128i SIMD<int16_t>::add(__m128i a, __m128i b) {
 template<> inline __m128i SIMD<int16_t>::subtract(__m128i a, __m128i b) {
     return _mm_sub_epi16(a, b);
 }
+//template<> inline __m128i SIMD<int16_t>::div2(__m128i a) {
+//    return _mm_srli_epi16(a, 1);
+//}
 
 // 32 bit integers
 template<> inline __m128i SIMD<int32_t>::broadcast(int32_t i) {
@@ -1240,6 +1293,9 @@ template<> inline __m128i SIMD<int32_t>::add(__m128i a, __m128i b) {
 template<> inline __m128i SIMD<int32_t>::subtract(__m128i a, __m128i b) {
     return _mm_sub_epi32(a, b);
 }
+//template<> inline __m128i SIMD<int32_t>::div2(__m128i a) {
+//    return _mm_srli_epi32(a, 1);
+//}
 
 template<int NumPW>
 inline std::pair<std::vector<CIGAROp>, int32_t>
@@ -2148,8 +2204,28 @@ template<int NumPW>
 template<typename StringType, typename MatchFunc, typename IntType>
 inline void WFAligner<NumPW>::wavefront_extend(const StringType& seq1, const StringType& seq2,
                                                Wavefront<IntType>& wf, const MatchFunc& match_func) const {
-    
     // TODO: vectorize i and j computation
+    // this currently doesn't work because i have signed values, so the bitshift doesn't accomplish
+    // a divide. i'm also not sure it will actually be faster because of the serial final step that
+    // can overshoot in narrow bands
+//    for (int k = 0, n = SIMD<IntType>::round_up(wf.size()), diag = wf.diag_begin;
+//         k < n; ++k, diag += SIMD<IntType>::vec_size()) {
+//
+//        // diagonal values
+//        __m128i dv = SIMD<IntType>::add(SIMD<IntType>::broadcast(diag), SIMD<IntType>::range());
+//        // seq1 indexes
+//        __m128i iv = SIMD<IntType>::div2(SIMD<IntType>::add(wf.M[k], dv));
+//        // seq2 indexes
+//        __m128i jv = SIMD<IntType>::div2(SIMD<IntType>::subtract(wf.M[k], dv));
+//        // TODO: this can overshoot and slow it down in a narrow band...
+//        for (int l = 0; l < SIMD<IntType>::vec_size(); ++l) {
+//            int64_t i = *(((IntType*) &iv) + l);
+//            int64_t j = *(((IntType*) &jv) + l);
+//            if (i >= 0 && j >= 0 && i < seq1.size() && j < seq2.size()) {
+//                wf.int_at(*(((IntType*) &dv) + l), 0) += 2 * match_func(i, j);
+//            }
+//        }
+//    }
     for (int64_t k = 0; k < wf.size(); ++k) {
         int64_t diag = wf.diag_begin + k;
         int64_t anti_diag = wf.int_at(diag, 0);
