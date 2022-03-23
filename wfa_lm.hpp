@@ -875,10 +875,10 @@ private:
     inline void init_arrays() {
         // we pad the array with a full vector on each end to handle boundary conditions
         interval = SIMD<IntType>::round_up(len) + 2;
-        int alloc_len = (2 * NumPW + 1) * interval;
-        if (posix_memalign((void**)&alloced, sizeof(__m128i), alloc_len * sizeof(__m128i))) {
+        int alloc_size = (2 * NumPW + 1) * interval * sizeof(__m128i);
+        if (posix_memalign((void**)&alloced, sizeof(__m128i), alloc_size)) {
             throw std::runtime_error(std::string("error:[WFAligner] could not perform aligned allocation of size "
-                                                 + std::to_string(alloc_len * sizeof(__m128i))).c_str());
+                                                 + std::to_string(alloc_size)).c_str());
         }
         // M is at the middle of the array
         M = alloced + interval * NumPW + 1;
@@ -890,6 +890,7 @@ public:
     Wavefront(int32_t diag_begin, int32_t diag_end)
         : diag_begin(diag_begin), len(diag_end - diag_begin)
     {
+
         init_arrays();
         for (int32_t i = 0, n = interval * (2 * NumPW + 1); i < n; ++i) {
             // TODO: i might be able to get away with only setting the
@@ -1473,6 +1474,7 @@ WFAligner<NumPW>::wavefront_align_core(const StringType& seq1, const StringType&
     if (Adaptive) {
         curr_mem += wfs.front().bytes();
     }
+    
     while (!wavefront_reached(wfs.back(), final_diag, final_anti_diag) &&
            wfs.size() - 1 <= max_s) {
         if (Adaptive && curr_mem > max_mem) {
@@ -1554,7 +1556,7 @@ WFAligner<NumPW>::fall_back_to_low_mem(const StringType& seq1, const StringType&
     }
     else {
         // grab the stripe(s) that would have been found in the buffer
-        size_t buffer_stripe_num = (wfs.size() + 1) / stripe_width - 1;
+        size_t buffer_stripe_num = wfs.size() / stripe_width - 1;
         for (size_t i = buffer_stripe_num * stripe_width; i < wfs.size(); ++i) {
             wf_buffer.emplace_back(std::move(wfs[i]));
         }
@@ -2200,6 +2202,14 @@ WFAligner<NumPW>::wavefront_next(const StringType& seq1, const StringType& seq2,
                     hi = std::max<int32_t>(hi, wf_prev.diag_begin + (int64_t) wf_prev.size() + 1);
                 }
             }
+            s_back = gap_extend[i];
+            if (wfs.size() >= s_back) {
+                const auto& wf_prev = wfs[wfs.size() - s_back];
+                if (!wf_prev.empty()) {
+                    lo = std::min<int32_t>(lo, wf_prev.diag_begin - 1);
+                    hi = std::max<int32_t>(hi, wf_prev.diag_begin + (int64_t) wf_prev.size() + 1);
+                }
+            }
         }
     }
     
@@ -2512,7 +2522,7 @@ std::vector<CIGAROp> WFAligner<NumPW>::wavefront_traceback_low_mem(const StringT
     int64_t lead_matches = 0;
     // the index within the traceback block that traceback ends, initial value is arbitrary
     int64_t relative_s = traceback_block.size() - 1;
-    
+
     // traceback as far as possible in this block
     wavefront_traceback_internal(seq1, seq2, traceback_block,
                                  d, lead_matches, mat, relative_s, cigar);
@@ -2548,7 +2558,6 @@ std::vector<CIGAROp> WFAligner<NumPW>::wavefront_traceback_low_mem(const StringT
         }
         i = j;
         
-        // traceback as far as possible in this block
         relative_s = traceback_block.size() - 1;
         wavefront_traceback_internal(seq1, seq2, traceback_block,
                                      d, lead_matches, mat, relative_s, cigar);
@@ -2587,18 +2596,19 @@ void WFAligner<NumPW>::wavefront_traceback_internal(const StringType& seq1, cons
                 int64_t i = (d + a) / 2 - 1;
                 int64_t j = (a - d) / 2 - 1;
                 int gap_close_from = 0;
-                while (i >= 0 && j >= 0 && seq1[i] == seq2[j]) {
+                while (true) {
                     // check if this is where a gap closed
-                    for (int i = 1; i <= NumPW; ++i) {
-                        if (a == wf.int_at(d, -i)) {
-                            gap_close_from = -i;
+                    for (int k = 1; k <= NumPW; ++k) {
+                        if (a == wf.int_at(d, -k)) {
+                            gap_close_from = -k;
                             break;
                         }
-                        if (a == wf.int_at(d, i)) {
-                            gap_close_from = i;
+                        if (a == wf.int_at(d, k)) {
+                            gap_close_from = k;
+                            break;
                         }
                     }
-                    if (gap_close_from != 0) {
+                    if (gap_close_from != 0 || i < 0 || j < 0 || seq1[i] != seq2[j]) {
                         break;
                     }
                     op_len += 1;
@@ -2655,8 +2665,7 @@ void WFAligner<NumPW>::wavefront_traceback_internal(const StringType& seq1, cons
                         if (wf.int_at(d, mat) == wf_prev.int_at(d - 1, 0) + 1) {
                             // an insert opened here
                             s -= extend + open;
-                            op_len += 1;
-                            cigar.emplace_back('I', op_len);
+                            cigar.emplace_back('I', op_len + 1);
                             d -= 1;
                             mat = 0;
                             op_len = 0;
@@ -2688,11 +2697,10 @@ void WFAligner<NumPW>::wavefront_traceback_internal(const StringType& seq1, cons
                     const auto& wf_prev = wfs[s - extend - open];
                     if (d + 1 >= wf_prev.diag_begin && d + 1 < wf_prev.diag_begin + (int64_t) wf_prev.size()){
                         if (wf.int_at(d, mat) == wf_prev.int_at(d + 1, 0) + 1) {
-                            // a deletion opened here
+                            // a deletion opened her
                             s -= extend + open;
-                            op_len += 1;
                             d += 1;
-                            cigar.emplace_back('D', op_len);
+                            cigar.emplace_back('D', op_len + 1);
                             mat = 0;
                             op_len = 0;
                             continue;
@@ -2721,8 +2729,6 @@ void WFAligner<NumPW>::wavefront_traceback_internal(const StringType& seq1, cons
     else {
         
         int64_t a = wfs[s].int_at(d, 0);
-        // TODO: i don't love this solution for the partial traceback problem...
-        a -= 2 * lead_matches;
         lead_matches = 0;
         
         while (a != 0) {
@@ -2790,6 +2796,16 @@ void WFAligner<NumPW>::wavefront_traceback_internal(const StringType& seq1, cons
                     }
                     continue;
                 }
+            }
+            
+            // we may need to walk the most recent match again in case we overshot
+            // at the boundary of the block
+            if (lead_matches) {
+                cigar.back().len -= lead_matches;
+                if (cigar.back().len == 0) {
+                    cigar.pop_back();
+                }
+                lead_matches = 0;
             }
             
             // we didn't find a backtrace, so it must be outside the current
@@ -2869,6 +2885,7 @@ inline std::pair<size_t, size_t> WFAligner<NumPW>::cigar_base_length(const std::
 // merge all adjacent, equivalent operations
 template<int NumPW>
 inline void WFAligner<NumPW>::coalesce_cigar(std::vector<CIGAROp>& cigar) const {
+    
     size_t into = 0;
     for (size_t j = 1; j < cigar.size(); ++j) {
         if (cigar[j].op == cigar[into].op) {
