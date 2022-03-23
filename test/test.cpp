@@ -30,22 +30,50 @@
 #include "wfa_lm.hpp"
 #include "wfa_lm_st.hpp"
 
+
+template<int N>
 int score_cigar(const std::string& seq1, const std::string& seq2,
                 const std::vector<wfalm::CIGAROp>& cigar,
-                int mismatch, int gap_open, int gap_extend) {
+                int mismatch, std::array<uint32_t, N> gap_open, std::array<uint32_t, std::max(1, N)> gap_extend) {
     int s = 0;
     int i = 0;
     int j = 0;
     for (auto c : cigar) {
         switch (c.op) {
             case 'I':
+            {
+                int min_penalty = 100000000;
+                for (size_t k = 0; k < gap_extend.size(); ++k) {
+                    int penalty;
+                    if (k < gap_open.size()) {
+                        penalty = gap_open[k] + c.len * gap_extend[k];
+                    }
+                    else {
+                        penalty = c.len * gap_extend[k];
+                    }
+                    min_penalty = std::min(min_penalty, penalty);
+                }
                 i += c.len;
-                s += gap_open + c.len * gap_extend;
+                s += min_penalty;
                 break;
+            }
             case 'D':
+            {
+                int min_penalty = 100000000;
+                for (size_t k = 0; k < gap_extend.size(); ++k) {
+                    int penalty;
+                    if (k < gap_open.size()) {
+                        penalty = gap_open[k] + c.len * gap_extend[k];
+                    }
+                    else {
+                        penalty = c.len * gap_extend[k];
+                    }
+                    min_penalty = std::min(min_penalty, penalty);
+                }
                 j += c.len;
-                s += gap_open + c.len * gap_extend;
+                s += min_penalty;
                 break;
+            }
             case 'M':
             {
                 for (int k = 0; k < c.len; ++k, ++i, ++j) {
@@ -66,6 +94,7 @@ int score_cigar(const std::string& seq1, const std::string& seq2,
 
 int main(int argc, char** argv) {
     
+    // anchor            |       |
     //  0    2   3    4  6        7  8     11     12
     //           *    *           *  *            *
     //  TACGGTCACCGCGACGA-CGACGGCAATTACTCCAAGTTGTCT
@@ -77,14 +106,29 @@ int main(int argc, char** argv) {
     //      0   7    7  3        0  6     89     02
     std::string seq1 = "TACGGTCACCGCGACGACGACGGCAATTACTCCAAGTTGTCT";
     std::string seq2 = "TACGGCACGGCGATGAACGACGGCACTTTCTCCATTGTCC";
-    
-    int mismatch = 1;
-    int gap_open = 1;
-    int gap_extend = 1;
-    int max_mem = 400;
 
-    wfalm::WFAligner aligner(mismatch, gap_open, gap_extend);
-    wfalm::WFAlignerST aligner_st(mismatch, gap_open, gap_extend);
+//    uint32_t mismatch = 1;
+//    std::array<uint32_t, 0> gap_open;
+//    std::array<uint32_t, 1> gap_extend{1};
+//    uint32_t max_mem = 400;
+    
+    uint32_t mismatch = 1;
+    std::array<uint32_t, 1> gap_open{1};
+    std::array<uint32_t, 1> gap_extend{1};
+    uint32_t max_mem = 400;
+
+//    // TACGGC-CGGCGATG--------CACTTTCTCCATTG-CC
+//    // TACGGCACGGCGATGAACGACGGCACTTTCTCCATTGTCC
+//    std::string seq1 = "TACGGCCGGCGATGCACTTTCTCCATTGCC";
+//    std::string seq2 = "TACGGCACGGCGATGAACGACGGCACTTTCTCCATTGTCC";
+//
+//    uint32_t mismatch = 1;
+//    std::array<uint32_t, 2> gap_open{1, 3};
+//    std::array<uint32_t, 2> gap_extend{2, 1};
+//    uint32_t max_mem = 400;
+
+    wfalm::WFAligner<1> aligner(mismatch, gap_extend, gap_open);
+    wfalm::WFAlignerST<1> aligner_st(mismatch, gap_extend, gap_open);
     
     int prune = -1;//ceil(-2.0 * log(1e-12) / log(4.0));
     aligner.lagging_diagonal_prune = prune;
@@ -97,8 +141,16 @@ int main(int argc, char** argv) {
     std::cout << seq2 << std::endl;
     std::cout << "params:" << std::endl;
     std::cout << "\tx = " << mismatch << std::endl;
-    std::cout << "\to = " << gap_open << std::endl;
-    std::cout << "\te = " << gap_extend << std::endl;
+    std::cout << "\to =";
+    for (auto o : gap_open) {
+        std::cout << ' ' << o;
+    }
+    std::cout << std::endl;
+    std::cout << "\te =";
+    for (auto e : gap_extend) {
+        std::cout << ' ' << e;
+    }
+    std::cout << std::endl;
     std::cout << "\tp = " << prune << std::endl;
     std::cout << "\tM = " << max_mem << std::endl;
     for (int mem : {0, 1, 2, 3}) {
@@ -151,8 +203,7 @@ int main(int argc, char** argv) {
 
             }
             auto cigar = res.first;
-            int s = score_cigar(seq1, seq2, cigar, mismatch, gap_open, gap_extend);
-            assert(s == res.second);
+            int s = res.second;
 
             std::cout << "score: " << s << std::endl;
             std::cout << "score density: " << double(s) / double(seq1.size() + seq2.size()) << std::endl;
@@ -161,6 +212,8 @@ int main(int argc, char** argv) {
                 std::cout << cigar_op.len << cigar_op.op;
             }
             std::cout << std::endl;
+            
+            assert(s == score_cigar<1>(seq1, seq2, cigar, mismatch, gap_open, gap_extend));
         }
     }
     
@@ -168,26 +221,26 @@ int main(int argc, char** argv) {
     std::string pref2 = "ACCCGGCTCACGCC";
     std::string suff1 = "GAGAACTCTAATGG";
     std::string suff2 = "CTTTTAAATGGTAG";
-    
+
     auto local_seq1 = pref1 + seq1 + suff1;
     auto local_seq2 = pref2 + seq2 + suff2;
-    
-    int match_sw = 1;
-    int mismatch_sw = 1;
-    int gap_open_sw = 2;
-    int gap_extend_sw = 1;
+
+    uint32_t match_sw = 1;
+    uint32_t mismatch_sw = 1;
+    uint32_t gap_open_sw = 2;
+    uint32_t gap_extend_sw = 1;
     int max_mem_sw = 200;
-    
-    wfalm::WFAligner aligner_sw(match_sw, mismatch_sw, gap_open_sw, gap_extend_sw);
-    wfalm::WFAlignerST aligner_sw_st(match_sw, mismatch_sw, gap_open_sw, gap_extend_sw);
-    
+
+    wfalm::WFAligner<1> aligner_sw(match_sw, mismatch_sw, {gap_extend_sw}, {gap_open_sw});
+    wfalm::WFAlignerST<1> aligner_sw_st(match_sw, mismatch_sw, {gap_extend_sw}, {gap_open_sw});
+
     int anchor_begin_1 = pref1.size() + 16;
     int anchor_end_1 = pref1.size() + 25;
     int anchor_begin_2 = pref2.size() + 16;
     int anchor_end_2 = pref2.size() + 25;
-    
+
     std::cout << std::endl << "LOCAL ALIGNMENT" << std::endl;
-    
+
     std::cout << "sequence 1: " << std::endl;
     std::cout << local_seq1 << std::endl;
     std::cout << "sequence 2: " << std::endl;
@@ -271,7 +324,7 @@ int main(int argc, char** argv) {
                                                        false);
             }
             auto cigar = std::get<0>(res);
-            
+
             std::cout << "score: " << std::get<1>(res) << std::endl;
             std::cout << "aligned intervals: s1[" << std::get<2>(res).first << ":" << std::get<2>(res).second << "], s2[" << std::get<3>(res).first << ":" << std::get<3>(res).second << "]" << std::endl;
             std::cout << "CIGAR string:" << std::endl;
