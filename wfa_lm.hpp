@@ -516,7 +516,7 @@ protected:
     template<bool Local, typename IntType, typename StringType, typename MatchFunc>
     std::pair<std::vector<CIGAROp>, int32_t>
     wavefront_align_low_mem_core(const StringType& seq1, const StringType& seq2,
-                                 const MatchFunc& match_func, uint64_t max_mim) const;
+                                 const MatchFunc& match_func) const;
     
     // internal routine for low memory WFA after initialization or fall-back
     template<bool Local, bool Adaptive, typename IntType, typename StringType, typename MatchFunc>
@@ -1443,10 +1443,11 @@ WFAligner<NumPW>::wavefront_dispatch(const StringType& seq1, const StringType& s
             result = wavefront_align_core<Local, true, int8_t>(seq1, seq2, match_func, max_mem);
         }
         else if (Mem == StdMem) {
-            result = wavefront_align_core<Local, false, int8_t>(seq1, seq2, match_func, max_mem);
+            result = wavefront_align_core<Local, false, int8_t>(seq1, seq2, match_func,
+                                                                std::numeric_limits<uint64_t>::max());
         }
         else if (Mem == LowMem) {
-            result = wavefront_align_low_mem_core<Local, int8_t>(seq1, seq2, match_func, max_mem);
+            result = wavefront_align_low_mem_core<Local, int8_t>(seq1, seq2, match_func);
         }
         else {
             result = wavefront_align_recursive_core<Local, int8_t>(seq1, seq2, match_func);
@@ -1457,10 +1458,11 @@ WFAligner<NumPW>::wavefront_dispatch(const StringType& seq1, const StringType& s
             result = wavefront_align_core<Local, true, int16_t>(seq1, seq2, match_func, max_mem);
         }
         else if (Mem == StdMem) {
-            result = wavefront_align_core<Local, false, int16_t>(seq1, seq2, match_func, max_mem);
+            result = wavefront_align_core<Local, false, int16_t>(seq1, seq2, match_func,
+                                                                 std::numeric_limits<uint64_t>::max());
         }
         else if (Mem == LowMem) {
-            result = wavefront_align_low_mem_core<Local, int16_t>(seq1, seq2, match_func, max_mem);
+            result = wavefront_align_low_mem_core<Local, int16_t>(seq1, seq2, match_func);
         }
         else {
             result = wavefront_align_recursive_core<Local, int16_t>(seq1, seq2, match_func);
@@ -1471,10 +1473,11 @@ WFAligner<NumPW>::wavefront_dispatch(const StringType& seq1, const StringType& s
             result = wavefront_align_core<Local, true, int32_t>(seq1, seq2, match_func, max_mem);
         }
         else if (Mem == StdMem) {
-            result = wavefront_align_core<Local, false, int32_t>(seq1, seq2, match_func, max_mem);
+            result = wavefront_align_core<Local, false, int32_t>(seq1, seq2, match_func,
+                                                                 std::numeric_limits<uint64_t>::max());
         }
         else if (Mem == LowMem) {
-            result = wavefront_align_low_mem_core<Local, int32_t>(seq1, seq2, match_func, max_mem);
+            result = wavefront_align_low_mem_core<Local, int32_t>(seq1, seq2, match_func);
         }
         else {
             result = wavefront_align_recursive_core<Local, int32_t>(seq1, seq2, match_func);
@@ -1661,7 +1664,7 @@ template<int NumPW>
 template<bool Local, typename IntType, typename StringType, typename MatchFunc>
 std::pair<std::vector<CIGAROp>, int32_t>
 WFAligner<NumPW>::wavefront_align_low_mem_core(const StringType& seq1, const StringType& seq2,
-                                               const MatchFunc& match_func, uint64_t max_mem) const {
+                                               const MatchFunc& match_func) const {
 
     // subsampling params
     int64_t epoch_len = 1;
@@ -1695,7 +1698,8 @@ WFAligner<NumPW>::wavefront_align_low_mem_core(const StringType& seq1, const Str
     // TODO: i'm not sure if all of the tracking variables will be able to get optimized out
     // since it will be hard to identify them as constant. compiler might not respect inlining
     // of internal method
-    return wavefront_align_low_mem_core_internal<Local, false, IntType>(seq1, seq2, match_func, max_mem,
+    return wavefront_align_low_mem_core_internal<Local, false, IntType>(seq1, seq2, match_func,
+                                                                        std::numeric_limits<uint64_t>::max(),
                                                                         epoch_len, epoch_end, sample_rate,
                                                                         opt, opt_diag, opt_s, max_s,
                                                                         wf_buffer, s, wf_bank, curr_mem, 0, 0, 0);
