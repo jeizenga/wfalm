@@ -75,6 +75,18 @@ inline AffineWFAligner make_affine_wfaligner(uint32_t mismatch, uint32_t gap_ext
 inline AffineWFAligner make_affine_wfaligner(uint32_t match, uint32_t mismatch, uint32_t gap_extend, uint32_t gap_open);
 
 /*
+ * A convenience specialization that uses a convex gap penalty.
+ */
+typedef WFAligner<2> ConvexWFAligner;
+/// Construct with WFA-style scoring parameters
+inline ConvexWFAligner make_convex_wfaligner(uint32_t mismatch, uint32_t gap_extend_1, uint32_t gap_open_1,
+                                             uint32_t gap_extend_2, uint32_t gap_open_2);
+/// Construct with Smith-Waterman-Gotoh-style scoring parameters
+inline ConvexWFAligner make_convex_wfaligner(uint32_t match, uint32_t mismatch,
+                                             uint32_t gap_extend_1, uint32_t gap_open_1,
+                                             uint32_t gap_extend_2, uint32_t gap_open_2);
+
+/*
  * Class that performs WFA with the standard, low-memory, or recusive variants.
  * The aligner objects are relatively lightweight and can be constructed for
  * single-use with limited overhead. The template integer controls how many
@@ -1113,21 +1125,34 @@ public:
     int32_t interval = 0;
 };
 
-LinearWFAligner make_linear_wfaligner(uint32_t mismatch, uint32_t gap) {
+inline LinearWFAligner make_linear_wfaligner(uint32_t mismatch, uint32_t gap) {
     return LinearWFAligner(mismatch, std::array<uint32_t, 1>{gap}, std::array<uint32_t, 0>());
 }
 
-LinearWFAligner make_linear_wfaligner(uint32_t match, uint32_t mismatch, uint32_t gap) {
+inline LinearWFAligner make_linear_wfaligner(uint32_t match, uint32_t mismatch, uint32_t gap) {
     return LinearWFAligner(match, mismatch, std::array<uint32_t, 1>{gap}, std::array<uint32_t, 0>());
 }
 
 
-AffineWFAligner make_affine_wfaligner(uint32_t mismatch, uint32_t gap_extend, uint32_t gap_open) {
+inline AffineWFAligner make_affine_wfaligner(uint32_t mismatch, uint32_t gap_extend, uint32_t gap_open) {
     return AffineWFAligner(mismatch, std::array<uint32_t, 1>{gap_extend}, std::array<uint32_t, 1>{gap_open});
 }
 
-AffineWFAligner make_affine_wfaligner(uint32_t match, uint32_t mismatch, uint32_t gap_extend, uint32_t gap_open) {
+inline AffineWFAligner make_affine_wfaligner(uint32_t match, uint32_t mismatch, uint32_t gap_extend, uint32_t gap_open) {
     return AffineWFAligner(match, mismatch, std::array<uint32_t, 1>{gap_extend}, std::array<uint32_t, 1>{gap_open});
+}
+
+inline ConvexWFAligner make_convex_wfaligner(uint32_t mismatch, uint32_t gap_extend_1, uint32_t gap_open_1,
+                                             uint32_t gap_extend_2, uint32_t gap_open_2) {
+    return ConvexWFAligner(mismatch, std::array<uint32_t, 2>{gap_extend_1, gap_extend_2},
+                           std::array<uint32_t, 2>{gap_open_1, gap_open_2});
+}
+
+inline ConvexWFAligner make_convex_wfaligner(uint32_t match, uint32_t mismatch,
+                                             uint32_t gap_extend_1, uint32_t gap_open_1,
+                                             uint32_t gap_extend_2, uint32_t gap_open_2) {
+    return ConvexWFAligner(match, mismatch, std::array<uint32_t, 2>{gap_extend_1, gap_extend_2},
+                           std::array<uint32_t, 2>{gap_open_1, gap_open_2});
 }
 
 template<int NumPW>
