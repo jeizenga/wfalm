@@ -14,13 +14,15 @@ The three memory-reducing variations are eminently practical, but the suffix tre
 
 ## Installation
 
-Because many users will not need the suffix tree algorithm, the library is implemented in two headers. The non-suffix tree algorithm is implemented in `wfa_lm.hpp`. It is single-header, but it depends on [SIMDE](https://github.com/simd-everywhere/simde) (which is also header-only) for portability. To install, first out the SIMDE submodule:
+Because many users will not need the suffix tree algorithm, the library is implemented in two headers. The non-suffix tree algorithm is implemented in `wfa_lm.hpp`. For environments with modern x86 processors, this header is entirely self-contained and depends on nothing except the C++14 standard library. Simply copy `wfa_lm.hpp` into the include directory of your project. You may need to add `-msse4.1` to your compiler invocation.
+
+The library is usable in environments with non-x86 processors (such as many Apple notebooks), but it depends on [SIMDE](https://github.com/simd-everywhere/simde) for portability. SIMDE is a header-only library as well. To use it, first check out the SIMDE submodule:
 
 	git submodule update --init --recursive
 
-Next, simply copy `wfa_lm.hpp` and `simde/simde` into the include directory of the project.
+Next, copy `wfa_lm.hpp` and `simde/simde/` into the include directory of your project.
 
-The suffix tree algorithm is implemented in `wfa_lm_st.hpp`. It is also single-header, but it depends on [SDSL v.3](https://github.com/xxsds/sdsl-lite) for its implementation of a suffix tree. After that, the headers in `external/sdsl-lite/include` will also need to be included in the new project.
+The suffix tree algorithm is implemented in `wfa_lm_st.hpp`. It is also single-header, but it depends on [SDSL v3](https://github.com/xxsds/sdsl-lite) for its implementation of a suffix tree. To use it, check out the submodules as described above and copy the headers in `external/sdsl-lite/include` to your project's include directory.
 
 ## Citation
 

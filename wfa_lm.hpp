@@ -38,8 +38,12 @@
 #include <tuple>
 #include <array>
 
+#if defined(__SSE4_1__) || defined(__SSE4_2__)
+#include <x86intrin.h>
+#else
 #define SIMDE_ENABLE_NATIVE_ALIASES
-#include "simde/x86/sse4.2.h"
+#include "simde/x86/sse4.1.h"
+#endif
 
 namespace wfalm {
 
