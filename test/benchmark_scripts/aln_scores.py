@@ -23,7 +23,7 @@ def pam_mat(alpha):
 
 if __name__ == "__main__":
     
-    identity = .995 #float(sys.argv[1])
+    identity = float(sys.argv[1])
     
     res = opt.minimize_scalar(lambda a: (pam_mat(a)[0, 0] - identity)**2)
     
